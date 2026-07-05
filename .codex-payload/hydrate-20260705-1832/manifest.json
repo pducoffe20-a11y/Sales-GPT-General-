@@ -1,0 +1,9 @@
+{
+  "payload_id": "hydrate-20260705-1832",
+  "local_commit": "bc1f7eb72b29d73e5c708f22c50f8c1ea07e7e20",
+  "chunk_size": 30000,
+  "chunk_count": 9,
+  "encoded_length": 263324,
+  "compressed_bytes": 197492,
+  "archive_bytes": 768000
+}
