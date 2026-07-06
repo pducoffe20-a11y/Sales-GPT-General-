@@ -123,7 +123,22 @@ const initials = (name: string) =>
 const cssVar = (name: string, value: number): CSSProperties =>
   ({ [name]: value }) as CSSProperties;
 
-const appToday = new Date("2026-07-05T00:00:00-04:00");
+const getAppToday = (injectedDate?: Date | string) => {
+  const date = injectedDate ? new Date(injectedDate) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+};
+
+const appToday = getAppToday();
+
+const formatTopbarDate = (date: Date) =>
+  new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  })
+    .format(date)
+    .replace(/,? /, " · ");
 
 const parseCloseDate = (value: string) => {
   const parsed = new Date(`${value} 00:00:00`);
@@ -3202,7 +3217,7 @@ export function App() {
               </div>
             )}
           </div>
-          <span className="clock">Sun · 05 Jul 2026</span>
+          <span className="clock">{formatTopbarDate(appToday)}</span>
           <button
             className="toolbtn"
             aria-label="Toggle theme"
