@@ -45,6 +45,7 @@ import {
   profileImportRows,
   recommendedFieldsByPurpose
 } from "./analysis/importParser";
+import { cleanUploadFormats, importSamples, prospectSampleCsv } from "./data/samples";
 import type {
   Account,
   ImportPurpose,
@@ -834,10 +835,29 @@ const purposeView: Record<
 const statusPill = (status: ProspectStatus) =>
   status === "Work Now" ? "accent" : status === "Light Research" ? "warn" : "plain";
 
-const sampleCsv = `company,contact,title,vertical,email,notes
-National Assoc. of Shop Owners,Tom Reynolds,VP Learning,Association,tom@example.org,LMS budget approved and pilot planning underway
-Healthcare Educators Assoc,Sarah Mitchell,Director of Education,Credentialing,sarah@example.org,CE reporting deadline and audit readiness review
-Regional Grocers Guild,,Coordinator,Trade,,member newsletter list only`;
+function UploadFormatReference({ purpose }: { purpose: ImportPurpose }) {
+  const fmt = cleanUploadFormats[purpose];
+  return (
+    <div>
+      <div className="callout info" style={{ marginBottom: 12 }}>
+        Cleanest manual-upload format for <b>{importPurposeLabels[purpose]}</b>. Automated
+        connectors are v2 — for now, match these headers in a CSV.
+      </div>
+      <div className="subhead" style={{ marginTop: 0 }}>Columns (in order)</div>
+      <div className="chips">
+        {fmt.columns.map((col) => (
+          <span key={col} className={`chip${fmt.required.includes(col) ? " req" : ""}`}>
+            <code className="mono">{col}</code>
+            {fmt.required.includes(col) ? " *" : ""}
+          </span>
+        ))}
+      </div>
+      <div className="callout teal" style={{ marginTop: 12, fontSize: 12 }}>
+        {fmt.note} Columns marked <b>*</b> are required; the rest are optional but improve scoring.
+      </div>
+    </div>
+  );
+}
 
 function RecordCard({ record, purpose }: { record: ProspectRecord; purpose: ImportPurpose }) {
   const cfg = purposeView[purpose];
@@ -907,11 +927,21 @@ function RecordCard({ record, purpose }: { record: ProspectRecord; purpose: Impo
 }
 
 function ImportsView() {
-  const [sourceName, setSourceName] = useState("Prospect list");
+  const [sourceName, setSourceName] = useState("PA associations – LMS prospect scan");
   const [sourceType, setSourceType] = useState<SourceCategory>("csv_upload");
   const [purpose, setPurpose] = useState<ImportPurpose>("prospect_research");
-  const [input, setInput] = useState(sampleCsv);
+  const [input, setInput] = useState(prospectSampleCsv);
   const [upload, setUpload] = useState<ProspectUpload | null>(null);
+
+  const loadSample = (id: string) => {
+    const sample = importSamples.find((s) => s.id === id);
+    if (!sample) return;
+    setInput(sample.data);
+    setPurpose(sample.purpose);
+    setSourceName(sample.sourceName);
+    setSourceType(sample.purpose === "pipeline_review" ? "crm_export" : "csv_upload");
+    setUpload(null);
+  };
 
   const profile = useMemo(() => {
     if (!input.trim()) return null;
@@ -934,7 +964,7 @@ function ImportsView() {
       <ViewHead
         eyebrow="Prospect strategy"
         title="Import Processor"
-        sub="Paste a CSV, CRM export, or meeting note. It profiles the columns live, then scores every row into Work Now, Light Research, and Suppress with the evidence kept visible."
+        sub="Load a real sample — the PA association prospect scan or the open Salesforce opportunities — or paste your own CSV, CRM export, or meeting note. It profiles the columns live, then scores every row into Work Now, Light Research, and Suppress with the evidence kept visible."
       />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Import setup">
@@ -972,6 +1002,22 @@ function ImportsView() {
                   />
                   {importPurposeLabels[p]}
                 </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="field" style={{ marginTop: 12 }}>
+            <span>Load a real sample</span>
+            <div className="export-row">
+              {importSamples.map((sample) => (
+                <button
+                  key={sample.id}
+                  className="btn"
+                  title={sample.description}
+                  onClick={() => loadSample(sample.id)}
+                >
+                  <Upload size={15} /> {sample.label}
+                </button>
               ))}
             </div>
           </div>
@@ -1050,6 +1096,10 @@ function ImportsView() {
                 </div>
               )}
             </div>
+          </Panel>
+
+          <Panel eyebrow="Manual uploads" title="Cleanest Upload Format" testid="upload-format">
+            <UploadFormatReference purpose={purpose} />
           </Panel>
 
           <Panel eyebrow="Scored board" title="Import Results">
