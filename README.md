@@ -11,6 +11,7 @@ Real data used to test the Import Processor lives in [`samples/`](samples/):
 | --- | --- | --- |
 | `pa-associations-prospects.csv` | 1,388 | Prospect / account research (full scored PA association list) |
 | `open-opportunities-pipeline.csv` | 14 | Pipeline / forecast review (open Salesforce opportunities) |
+| `pat-target-accounts.csv` | 84 | Prospect / account research (tiered territory target accounts) |
 | `manual-upload-template-prospects.csv` | 1 | Blank prospect-research template |
 | `manual-upload-template-pipeline.csv` | 1 | Blank pipeline-review template |
 
