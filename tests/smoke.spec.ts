@@ -116,6 +116,7 @@ Credentialing Board of Ohio,Renee Martin,Director of Certification,Credentialing
   await expect(page.getByTestId("import-results")).toContainText(
     "Credentialing Board of Ohio",
   );
+  await expect(page.getByTestId("import-results").locator(".rec")).toHaveCount(1);
   await expect(page.getByTestId("import-results")).toContainText("Work Now");
   await expect(page.getByRole("link", { name: "Export CSV" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Export JSON" })).toBeVisible();

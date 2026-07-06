@@ -2380,13 +2380,6 @@ function ImportsView() {
                       <RecordCard key={record.prospectId} record={record} purpose={purpose} />
                     ))
                   )}
-                  {upload.records.map((record) => (
-                    <RecordCard
-                      key={record.prospectId}
-                      record={record}
-                      purpose={purpose}
-                    />
-                  ))}
                 </div>
               )}
             </div>
