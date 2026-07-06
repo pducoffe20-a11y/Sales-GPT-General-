@@ -53,6 +53,21 @@ export interface Recommendation {
   originatingModule: string;
 }
 
+export interface LinkedInEvidenceLayer {
+  linkedinSignals: string[];
+  profileEvidence: string[];
+  roleFitEvidence: string[];
+  recentActivityEvidence: string[];
+  researchConfidenceImpact: string;
+}
+
+export interface AccountResearchRecord extends LinkedInEvidenceLayer {
+  accountId: string;
+  accountName: string;
+  source: Extract<SourceCategory, "linkedin" | "sales_navigator" | "manual">;
+  generatedAt: string;
+}
+
 export interface Contact {
   id: string;
   accountId: string;
@@ -62,6 +77,11 @@ export interface Contact {
   persona: "Champion" | "Influencer" | "Economic Buyer" | "Technical Buyer" | "Blocker" | "Unknown";
   relationship: "Warm" | "Active" | "New" | "Stalled" | "Unknown";
   notes: string;
+  linkedinSignals?: string[];
+  profileEvidence?: string[];
+  roleFitEvidence?: string[];
+  recentActivityEvidence?: string[];
+  researchConfidenceImpact?: string;
 }
 
 export interface Account {
@@ -83,6 +103,7 @@ export interface Account {
   health: "Good" | "Watch" | "Risk";
   competitors: Competitor[];
   contacts: Contact[];
+  researchRecord?: AccountResearchRecord;
 }
 
 export interface Meeting {
@@ -193,6 +214,11 @@ export interface ProspectRecord {
   unknowns: string[];
   whatToCheckFirst: string[];
   evidenceNotes: string[];
+  linkedinSignals?: string[];
+  profileEvidence?: string[];
+  roleFitEvidence?: string[];
+  recentActivityEvidence?: string[];
+  researchConfidenceImpact?: string;
   recommendedActions: Recommendation[];
 }
 

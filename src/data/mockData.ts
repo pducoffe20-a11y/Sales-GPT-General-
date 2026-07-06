@@ -75,6 +75,28 @@ export const accounts: Account[] = [
     buyingCommittee: ["Champion", "Technical Buyer", "Economic Buyer"],
     nextBestMove: "Run a solution workshop focused on CE reporting and audit readiness.",
     researchGaps: ["Confirm regulatory deadline", "Find IT/security counterpart"],
+    researchRecord: {
+      accountId: "acct-hesa",
+      accountName: "Healthcare Educators Association",
+      source: "linkedin",
+      generatedAt: "2026-07-06T09:00:00.000Z",
+      linkedinSignals: [
+        "Company page points to continuing education and credential-support audiences.",
+        "Profile evidence exists for the education buyer before outreach drafting."
+      ],
+      profileEvidence: [
+        "Sarah Mitchell profile mapped to Director of Education role.",
+        "Company LinkedIn page mapped to Healthcare Educators Association."
+      ],
+      roleFitEvidence: [
+        "Education ownership aligns to CE reporting, learner-progress visibility, and audit readiness discovery.",
+        "Healthcare credentialing context supports Brightspace member-learning relevance."
+      ],
+      recentActivityEvidence: [
+        "Recent LinkedIn post referenced CE reporting and audit readiness."
+      ],
+      researchConfidenceImpact: "LinkedIn evidence raises account research confidence, but remains read-only: no invites, messages, reactions, comments, posts, or write behavior."
+    },
     lastTouch: "Yesterday",
     nextTouchDue: "Tomorrow",
     amount: 220000,
@@ -93,7 +115,12 @@ export const accounts: Account[] = [
         email: "sarah.mitchell@example.org",
         persona: "Champion",
         relationship: "Warm",
-        notes: "Asked for examples of CE programs with cleaner audit trails."
+        notes: "Asked for examples of CE programs with cleaner audit trails.",
+        linkedinSignals: ["LinkedIn profile and recent activity support Sarah as the education-program research contact."],
+        profileEvidence: ["Profile mapped to Director of Education at Healthcare Educators Association."],
+        roleFitEvidence: ["Role suggests ownership of CE program outcomes and reporting needs."],
+        recentActivityEvidence: ["Recent post about CE reporting and audit readiness."],
+        researchConfidenceImpact: "Adds confidence for meeting prep and prospect research only; do not invite, message, react, comment, post, or write from this app."
       },
       {
         id: "c-dev",

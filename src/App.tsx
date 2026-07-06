@@ -832,6 +832,56 @@ function PipelineDealFocus({ deal }: { deal: PipelineRow | undefined }) {
 
 /* ------------------------------------------------------------ account view */
 
+function LinkedInEvidencePanel({
+  layer,
+  compact = false
+}: {
+  layer?: {
+    linkedinSignals?: string[];
+    profileEvidence?: string[];
+    roleFitEvidence?: string[];
+    recentActivityEvidence?: string[];
+    researchConfidenceImpact?: string;
+  };
+  compact?: boolean;
+}) {
+  if (!layer) return null;
+  const hasEvidence =
+    (layer.linkedinSignals?.length ?? 0) > 0 ||
+    (layer.profileEvidence?.length ?? 0) > 0 ||
+    (layer.roleFitEvidence?.length ?? 0) > 0 ||
+    (layer.recentActivityEvidence?.length ?? 0) > 0 ||
+    Boolean(layer.researchConfidenceImpact);
+  if (!hasEvidence) return null;
+
+  return (
+    <div className={compact ? "callout info" : "rec-block"}>
+      <div className="lab">LinkedIn evidence layer</div>
+      {layer.researchConfidenceImpact && <div className="queue-why">{layer.researchConfidenceImpact}</div>}
+      <div className="chips" style={{ marginTop: 8 }}>
+        {(layer.linkedinSignals ?? []).slice(0, compact ? 2 : 4).map((signal) => (
+          <span key={signal} className="chip"><Linkedin size={12} /> {signal}</span>
+        ))}
+      </div>
+      {!compact && (
+        <div className="grid grid-2" style={{ marginTop: 10 }}>
+          <div>
+            <div className="subhead" style={{ marginTop: 0 }}>Profile evidence</div>
+            <ul className="factlist">{(layer.profileEvidence ?? []).map((item) => <li key={item}>{item}</li>)}</ul>
+          </div>
+          <div>
+            <div className="subhead" style={{ marginTop: 0 }}>Role fit / activity</div>
+            <ul className="factlist">{[...(layer.roleFitEvidence ?? []), ...(layer.recentActivityEvidence ?? [])].map((item) => <li key={item}>{item}</li>)}</ul>
+          </div>
+        </div>
+      )}
+      <div className="callout teal" style={{ marginTop: 8, fontSize: 12 }}>
+        Guardrail: LinkedIn stays read-only here — no invites, messages, reactions, comments, posts, or write behavior.
+      </div>
+    </div>
+  );
+}
+
 function AccountDetail({ account }: { account: Account }) {
   return (
     <div className="acct-detail">
@@ -877,6 +927,13 @@ function AccountDetail({ account }: { account: Account }) {
       <div className="subhead">Next best move</div>
       <div className="callout teal">{account.nextBestMove}</div>
 
+      {account.researchRecord && (
+        <>
+          <div className="subhead">Account research evidence</div>
+          <LinkedInEvidencePanel layer={account.researchRecord} />
+        </>
+      )}
+
       <div className="subhead">Buying committee</div>
       <div className="chips">
         {account.buyingCommittee.map((role) => (
@@ -903,6 +960,7 @@ function AccountDetail({ account }: { account: Account }) {
             </div>
             <div className="ct">{c.title}</div>
             <div className="cnote">{c.notes}</div>
+            <LinkedInEvidencePanel layer={c} compact />
           </div>
           <span
             className={`pill ${c.relationship === "Active" ? "ok" : "plain"}`}
@@ -1847,6 +1905,8 @@ function RecordCard({
         </div>
       )}
 
+      <LinkedInEvidencePanel layer={record} />
+
       {record.unknowns.length > 0 && (
         <div className="rec-block">
           <div className="lab">Check first</div>
@@ -2369,6 +2429,18 @@ function LinkedInView() {
                       </div>
                     </div>
                   </div>
+
+                  <div className="callout teal" style={{ marginBottom: 12 }}>
+                    This brief is now treated as an evidence layer for account and prospect research records. Guardrail: no invites, messages, reactions, comments, posts, or write behavior.
+                  </div>
+
+                  <LinkedInEvidencePanel layer={{
+                    linkedinSignals: brief.verifiedSignals,
+                    profileEvidence: [brief.profileUrl ? `Profile evidence: ${brief.profileUrl}` : "Profile evidence missing.", brief.companyUrl ? `Company evidence: ${brief.companyUrl}` : "Company evidence missing."],
+                    roleFitEvidence: brief.buyerAngles,
+                    recentActivityEvidence: brief.verifiedSignals.filter((signal) => signal.startsWith("Seller note:")),
+                    researchConfidenceImpact: `LinkedIn evidence changes research confidence to ${brief.readiness} (${brief.researchScore}/100).`
+                  }} />
 
                   <div className="subhead">Verified signals</div>
                   <ul className="factlist">
