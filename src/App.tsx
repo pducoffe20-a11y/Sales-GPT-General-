@@ -964,7 +964,7 @@ function ImportsView() {
       <ViewHead
         eyebrow="Prospect strategy"
         title="Import Processor"
-        sub="Load a real sample — the PA association prospect scan or the open Salesforce opportunities — or paste your own CSV, CRM export, or meeting note. It profiles the columns live, then scores every row into Work Now, Light Research, and Suppress with the evidence kept visible."
+        sub="Load a real sample — the PA association prospect scan, the open Salesforce opportunities, or Pat’s territory target accounts — or paste your own CSV, CRM export, or meeting note. It profiles the columns live, then scores every row into Work Now, Light Research, and Suppress with the evidence kept visible."
       />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Import setup">
