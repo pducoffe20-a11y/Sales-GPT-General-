@@ -1,10 +1,13 @@
 import type {
   Account,
   Brief,
+  DailyTaskManager,
+  DailyTaskManagerInput,
   FollowUpDraft,
   ImportPurpose,
   LinkedInResearchBrief,
   LinkedInResearchIntent,
+  Meeting,
   OutlookIndexedEvent,
   OutlookIndexedMessage,
   OutlookIndexMode,
@@ -316,7 +319,7 @@ export const analyzeProspectRow = (
     whatToCheckFirst: unknowns.slice(0, 2),
     evidenceNotes: [evidenceNote],
     recommendedActions: [action],
-    signals: [signal]
+    signals: [signal],
     linkedinSignals: linkedinBrief?.verifiedSignals,
     profileEvidence: linkedinBrief ? [
       linkedinBrief.profileUrl ? `Profile evidence: ${linkedinBrief.profileUrl}` : "Profile evidence still missing.",
@@ -324,8 +327,7 @@ export const analyzeProspectRow = (
     ] : undefined,
     roleFitEvidence: linkedinBrief?.buyerAngles,
     recentActivityEvidence: linkedinBrief?.verifiedSignals.filter((signal) => signal.startsWith("Seller note:")),
-    researchConfidenceImpact: linkedinBrief ? `LinkedIn evidence moves research confidence to ${linkedinBrief.readiness} (${linkedinBrief.researchScore}/100); use only for read-only research, not invites, messages, reactions, comments, posts, or writes.` : undefined,
-    recommendedActions: [action]
+    researchConfidenceImpact: linkedinBrief ? `LinkedIn evidence moves research confidence to ${linkedinBrief.readiness} (${linkedinBrief.researchScore}/100); use only for read-only research, not invites, messages, reactions, comments, posts, or writes.` : undefined
   };
 };
 
@@ -1132,32 +1134,23 @@ export const reviewPatVoice = (copy: string) => {
   };
 };
 
-export const analyzePipeline = (opportunities: PipelineOpportunity[]) =>
-  opportunities.map((opportunity) => {
-    const riskScore =
-      (opportunity.probability < 45 ? 30 : 0) +
-      (opportunity.risk === "High" ? 35 : opportunity.risk === "Medium" ? 20 : 5) +
-      (/overdue|stalled|security|procurement/i.test(opportunity.nextMove) ? 18 : 0);
-    const posture = riskScore >= 55 ? "Could slip" : riskScore >= 32 ? "Watch closely" : "On track";
-    const signal: Signal = {
-      source: "manual",
-      account: opportunity.account,
-      opportunityId: opportunity.id,
-      signalType: signalTypeFromText(`${opportunity.stage} ${opportunity.closeDate} ${opportunity.nextMove} ${opportunity.whyItMatters}`, "pipeline_risk"),
-      evidence: `${opportunity.stage}; ${opportunity.nextMove}`,
-      confidence: riskScore >= 55 ? "High" : riskScore >= 32 ? "Medium" : "Low",
-      recommendedAction: opportunity.nextMove,
-      whyItMatters: opportunity.whyItMatters,
-      originatingModule: "Deal Journey"
-    };
-    return {
-      ...opportunity,
-      riskScore,
-      posture,
-      managerNote: `${posture}: ${signal.whyItMatters}`,
-      signal
-    };
-  });
+const pipelineOpportunityToSignal = (opportunity: PipelineOpportunity): Signal => {
+  const riskScore =
+    (opportunity.probability < 45 ? 30 : 0) +
+    (opportunity.risk === "High" ? 35 : opportunity.risk === "Medium" ? 20 : 5) +
+    (/overdue|stalled|security|procurement/i.test(opportunity.nextMove) ? 18 : 0);
+  return {
+    source: "manual",
+    account: opportunity.account,
+    opportunityId: opportunity.id,
+    signalType: signalTypeFromText(`${opportunity.stage} ${opportunity.closeDate} ${opportunity.nextMove} ${opportunity.whyItMatters}`, "pipeline_risk"),
+    evidence: `${opportunity.stage}; ${opportunity.nextMove}`,
+    confidence: riskScore >= 55 ? "High" : riskScore >= 32 ? "Medium" : "Low",
+    recommendedAction: opportunity.nextMove,
+    whyItMatters: opportunity.whyItMatters,
+    originatingModule: "Deal Journey"
+  };
+};
 
 export const buildAccountSignals = (accounts: Account[]): Signal[] =>
   accounts.map((account): Signal => {
@@ -1256,14 +1249,6 @@ export const buildAccountRecommendations = (accounts: Account[]): Recommendation
       return rank[b.priority] - rank[a.priority];
     });
 
-export const buildDailyTaskManager = (signals: Signal[]): Task[] =>
-  signals
-    .map((signal, index) => signalToTask(signal, index, signal.signalType === "deadline" || signal.signalType === "meeting" ? "Today" : "Next review"))
-    .sort((a, b) => {
-      const rank = { High: 3, Medium: 2, Low: 1 };
-      return rank[b.priority] - rank[a.priority];
-    });
-
 export const groupTasks = (tasks: Task[]) =>
   tasks.reduce<Record<Task["group"], Task[]>>(
     (groups, task) => {
@@ -1277,3 +1262,70 @@ export const groupTasks = (tasks: Task[]) =>
       "If Time Allows": []
     }
   );
+
+const dailyPriorityRank: Record<Priority, number> = { High: 3, Medium: 2, Low: 1 };
+
+const sortByPriority = <T extends { priority: Priority }>(items: T[]): T[] =>
+  [...items].sort((a, b) => dailyPriorityRank[b.priority] - dailyPriorityRank[a.priority]);
+
+const dedupeTasks = (tasks: Task[]): Task[] => {
+  const seen = new Set<string>();
+  return tasks.filter((task) => {
+    const key = `${task.account}|${task.concreteNextAction}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const meetingToTask = (meeting: Meeting, accounts: Account[], index: number): Task => {
+  const account = accounts.find((candidate) => candidate.id === meeting.accountId);
+  const contact = account?.contacts.find((candidate) => candidate.id === meeting.contactId);
+  return {
+    id: `meeting-task-${index + 1}`,
+    source: "calendar",
+    context: meeting.notes,
+    account: account?.name ?? meeting.title,
+    contact: contact?.name,
+    concreteNextAction: `Prep ${meeting.type.toLowerCase()}: ${meeting.title}`,
+    whyItMatters: `${meeting.prepStatus} prep before the ${meeting.time} ${meeting.mode.toLowerCase()} session.`,
+    due: meeting.time,
+    priority: meeting.prepStatus === "Needs work" ? "High" : "Medium",
+    group: "Meeting Prep And Time-Bound Tasks",
+    owner: "Pat"
+  };
+};
+
+// Daily Task Manager: merge every "what should Pat do next" source — existing
+// tasks, Outlook task candidates, pipeline opportunities, account
+// recommendations, and meeting prep — into one ranked, grouped output.
+export const buildDailyTaskManager = (input: DailyTaskManagerInput): DailyTaskManager => {
+  const accountSignals = buildAccountSignals(input.accounts);
+  const pipelineSignals = input.opportunities.map(pipelineOpportunityToSignal);
+  const signalTasks = [...accountSignals, ...pipelineSignals].map((signal, index) =>
+    signalToTask(
+      signal,
+      index,
+      signal.signalType === "deadline" || signal.signalType === "meeting" ? "Today" : "Next review"
+    )
+  );
+  const meetingTasks = input.meetings
+    .filter((meeting) => meeting.prepStatus !== "Good")
+    .map((meeting, index) => meetingToTask(meeting, input.accounts, index));
+
+  const tasks = sortByPriority(
+    dedupeTasks([
+      ...input.existingTasks,
+      ...(input.taskCandidates ?? []),
+      ...meetingTasks,
+      ...signalTasks
+    ])
+  );
+
+  const recommendations = sortByPriority([
+    ...(input.recommendations ?? buildAccountRecommendations(input.accounts)),
+    ...pipelineSignals.map((signal, index) => signalToRecommendation(signal, index, "pipeline-rec"))
+  ]);
+
+  return { tasks, grouped: groupTasks(tasks), recommendations };
+};

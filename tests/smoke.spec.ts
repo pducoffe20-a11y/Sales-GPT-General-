@@ -85,7 +85,7 @@ test("global search jumps to matching account context", async ({ page }) => {
 });
 
 test("meeting prep form submits", async ({ page }) => {
-  await page.getByRole("button", { name: "Today" }).click();
+  await page.getByRole("button", { name: "Today", exact: true }).click();
   await page.getByLabel("Account name").fill("Credentialing Board of Ohio");
   await page.getByLabel("Contact name").fill("Renee Martin");
   await page
@@ -143,40 +143,33 @@ Healthcare Credentialing Association,Renee Martin,Director of Education,Credenti
   await expect(page.getByTestId("import-results")).toContainText("Review Now");
 });
 
-test("pipeline visual scan filters and selects deal focus", async ({
+test("pipeline deal review board groups deals and selects a row", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Pipeline" }).click();
-  await expect(page.getByTestId("pipeline-visual-scan")).toContainText(
-    "Forecast amount",
+  await expect(page.getByTestId("deal-review-summary")).toContainText(
+    "Action-lane deals",
   );
-  await expect(page.getByTestId("pipeline-deal-focus")).toContainText(
-    "AmericanHort",
-  );
-
-  await page.getByRole("button", { name: "Best Case forecast" }).click();
-  await expect(page.getByTestId("pipeline-table")).toContainText(
-    "Justice & Upward Mobility Project",
-  );
-  await expect(page.getByTestId("pipeline-table")).not.toContainText(
-    "AmericanHort",
+  await expect(page.getByTestId("deal-review-summary")).toContainText(
+    "Weighted pipeline",
   );
 
-  await page.getByRole("button", { name: "Clear filters" }).click();
-  await page
+  const board = page.getByTestId("pipeline-deal-review-board");
+  await expect(board).toContainText("Needs Pat Action");
+  await expect(board).toContainText("Forecast Risk");
+
+  await expect(page.getByTestId("pipeline-table")).toContainText("AmericanHort");
+
+  const row = page
     .getByTestId("pipeline-table")
     .getByRole("button", {
       name: /Massachusetts Society of Certified Public Accountants/i,
-    })
-    .click();
-  await expect(page.getByTestId("pipeline-deal-focus")).toContainText(
-    "Massachusetts Society",
-  );
-  await expect(page.getByTestId("pipeline-deal-focus")).toContainText(
-    "Could slip",
-  );
+    });
+  await row.click();
+  await expect(row).toHaveAttribute("aria-pressed", "true");
+
   await page.screenshot({
-    path: `${screenshotDir}/pipeline-visual-scan.png`,
+    path: `${screenshotDir}/pipeline-deal-review-board.png`,
     fullPage: true,
   });
 });

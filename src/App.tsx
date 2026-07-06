@@ -35,14 +35,12 @@ import { integrationSources, pluginModules } from "./data/pluginRegistry";
 import {
   analyzePipeline,
   buildAccountRecommendations,
-  buildAccountSignals,
   buildDailyTaskManager,
   buildDealReviewBoard,
   buildFollowUpDraft,
   buildLinkedInResearchBrief,
   buildMeetingBrief,
   buildOutlookIndexPlan,
-  groupTasks,
   reviewPatVoice,
 } from "./analysis/engines";
 import {
@@ -1035,12 +1033,34 @@ function TodayView({
   const focus = accounts.find((a) => a.id === selectedId) ?? accounts[0];
   const openPipeline = pipeline.reduce((sum, o) => sum + o.amount, 0);
   const overdue = accounts.filter((a) => a.nextTouchDue === "Overdue").length;
-  const accountSignals = useMemo(() => buildAccountSignals(accounts), []);
-  const pipelineSignals = useMemo(() => analyzePipeline(pipeline).map((row) => row.signal), []);
-  const dailySignals = useMemo(() => [...accountSignals, ...pipelineSignals], [accountSignals, pipelineSignals]);
-  const dailyTasks = useMemo(() => buildDailyTaskManager(dailySignals), [dailySignals]);
-  const dailyRecommendations = useMemo(() => buildAccountRecommendations(accounts), []);
-  const grouped = groupTasks(dailyTasks.length ? dailyTasks : tasks);
+  const outlookPlan = useMemo(
+    () =>
+      buildOutlookIndexPlan({
+        mode: "daily_sales_scan",
+        mailboxLabel: "Pat Outlook",
+        startDate: "2026-07-01",
+        endDate: "2026-07-07",
+        emailQuery: "pilot, proposal, renewal",
+        calendarFocus: "discovery, executive review",
+        accountFocus: "Healthcare Educators Association",
+        connectorJson: outlookConnectorExample,
+      }),
+    [],
+  );
+  const daily = useMemo(
+    () =>
+      buildDailyTaskManager({
+        existingTasks: tasks,
+        taskCandidates: outlookPlan.taskCandidates,
+        opportunities: pipeline,
+        accounts,
+        recommendations: buildAccountRecommendations(accounts),
+        meetings,
+      }),
+    [outlookPlan],
+  );
+  const grouped = daily.grouped;
+  const dailyRecommendations = daily.recommendations;
 
   return (
     <div className="view">
@@ -1323,25 +1343,13 @@ function DealReviewGroupCard({ group }: { group: DealReviewGroup }) {
         )}
       </div>
     </section>
-function PipelineView() {
-  const rows = useMemo(() => analyzePipeline(pipeline), []);
-  const [forecastFilter, setForecastFilter] = useState<ForecastFilter>("All");
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
-  const [selectedDealId, setSelectedDealId] = useState(rows[0]?.id ?? "");
-  const visibleRows = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          (forecastFilter === "All" || row.forecast === forecastFilter) &&
-          (riskFilter === "All" || row.risk === riskFilter),
-      ),
-    [forecastFilter, riskFilter, rows],
   );
 }
 
 function PipelineView() {
   const board = useMemo(() => buildDealReviewBoard(pipeline), []);
   const rows = useMemo(() => board.flatMap((group) => group.deals), [board]);
+  const [selectedDealId, setSelectedDealId] = useState(rows[0]?.id ?? "");
   const totalOpen = rows.reduce((sum, deal) => sum + deal.amount, 0);
   const weightedOpen = rows.reduce((sum, deal) => sum + deal.amount * (deal.probability / 100), 0);
   const actionCount = board
@@ -1384,15 +1392,15 @@ function PipelineView() {
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((o) => (
+              {rows.map((o) => (
                 <tr
                   key={o.id}
-                  className={o.id === selectedVisibleId ? "active-row" : ""}
+                  className={o.id === selectedDealId ? "active-row" : ""}
                 >
                   <td>
                     <button
                       className="table-link"
-                      aria-pressed={o.id === selectedVisibleId}
+                      aria-pressed={o.id === selectedDealId}
                       onClick={() => setSelectedDealId(o.id)}
                     >
                       {o.account}
@@ -1423,10 +1431,10 @@ function PipelineView() {
               ))}
             </tbody>
           </table>
-          {visibleRows.length === 0 && (
+          {rows.length === 0 && (
             <div className="empty-state">
-              <div className="big">No deals match</div>
-              Clear a forecast or risk filter to bring records back.
+              <div className="big">No deals</div>
+              No open opportunities in the current pipeline.
             </div>
           )}
         </div>

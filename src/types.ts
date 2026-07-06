@@ -86,7 +86,7 @@ export interface LinkedInEvidenceLayer {
   researchConfidenceImpact: string;
 }
 
-export interface AccountResearchRecord extends LinkedInEvidenceLayer {
+export interface AccountLinkedInResearchRecord extends LinkedInEvidenceLayer {
   accountId: string;
   accountName: string;
   source: Extract<SourceCategory, "linkedin" | "sales_navigator" | "manual">;
@@ -128,7 +128,7 @@ export interface Account {
   health: "Good" | "Watch" | "Risk";
   competitors: Competitor[];
   contacts: Contact[];
-  researchRecord?: AccountResearchRecord;
+  researchRecord?: AccountLinkedInResearchRecord;
 }
 
 export interface Meeting {
@@ -155,6 +155,21 @@ export interface Task {
   priority: Priority;
   group: "Top Priorities" | "Meeting Prep And Time-Bound Tasks" | "Follow-Ups And Responses" | "If Time Allows";
   owner: "Pat" | "Prospect" | "Ambiguous";
+}
+
+export interface DailyTaskManagerInput {
+  existingTasks: Task[];
+  taskCandidates?: Task[];
+  opportunities: PipelineOpportunity[];
+  accounts: Account[];
+  recommendations?: Recommendation[];
+  meetings: Meeting[];
+}
+
+export interface DailyTaskManager {
+  tasks: Task[];
+  grouped: Record<Task["group"], Task[]>;
+  recommendations: Recommendation[];
 }
 
 export interface Brief {
