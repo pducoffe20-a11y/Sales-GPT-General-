@@ -205,6 +205,22 @@ export const analyzeProspectRow = (
   ].filter(Boolean);
   const purposeCopy = recommendationCopy(status, purpose);
   const evidenceNote = notes || nextStep || stage || dueDate || "Imported row did not include a useful evidence note.";
+  const linkedinBrief = sourceType === "linkedin" || sourceType === "sales_navigator" || sourceText.includes("linkedin.com")
+    ? buildLinkedInResearchBrief({
+        intent: purpose === "prospect_research" ? "person_research" : "account_research",
+        accountName: organization ?? "",
+        personName: fullName ?? "",
+        title: title ?? "",
+        profileUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/in/", "/sales/lead/"]),
+        companyUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/company/", "/sales/company/"]),
+        searchUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/search/", "/sales/search/"]),
+        listName: organization ? `${organization} LinkedIn evidence` : "LinkedIn evidence",
+        limit: "25",
+        icp: vertical,
+        notes: notes || nextStep || stage || ""
+      })
+    : null;
+
   const action: Recommendation = {
     id: `import-rec-${index}`,
     account: organization ?? "Unknown account",
@@ -235,6 +251,14 @@ export const analyzeProspectRow = (
     unknowns,
     whatToCheckFirst: unknowns.slice(0, 2),
     evidenceNotes: [evidenceNote],
+    linkedinSignals: linkedinBrief?.verifiedSignals,
+    profileEvidence: linkedinBrief ? [
+      linkedinBrief.profileUrl ? `Profile evidence: ${linkedinBrief.profileUrl}` : "Profile evidence still missing.",
+      linkedinBrief.companyUrl ? `Company evidence: ${linkedinBrief.companyUrl}` : "Company evidence still missing."
+    ] : undefined,
+    roleFitEvidence: linkedinBrief?.buyerAngles,
+    recentActivityEvidence: linkedinBrief?.verifiedSignals.filter((signal) => signal.startsWith("Seller note:")),
+    researchConfidenceImpact: linkedinBrief ? `LinkedIn evidence moves research confidence to ${linkedinBrief.readiness} (${linkedinBrief.researchScore}/100); use only for read-only research, not invites, messages, reactions, comments, posts, or writes.` : undefined,
     recommendedActions: [action]
   };
 };
