@@ -1,5 +1,8 @@
 import type {
   Account,
+  AgenticActionStep,
+  AgenticCommandPlan,
+  AgenticReviewArtifact,
   Brief,
   DailyTaskManager,
   DailyTaskManagerInput,
@@ -1268,6 +1271,120 @@ const dailyPriorityRank: Record<Priority, number> = { High: 3, Medium: 2, Low: 1
 const sortByPriority = <T extends { priority: Priority }>(items: T[]): T[] =>
   [...items].sort((a, b) => dailyPriorityRank[b.priority] - dailyPriorityRank[a.priority]);
 
+const confidenceRank: Record<Signal["confidence"], number> = { High: 3, Medium: 2, Low: 1 };
+
+const taskConfidence = (task: Task): Signal["confidence"] => {
+  if (task.owner === "Ambiguous") return "Low";
+  if (task.priority === "High" && task.due !== "Next review") return "High";
+  return task.priority === "Low" ? "Low" : "Medium";
+};
+
+const softCtaFromTask = (task: Task) =>
+  task.owner === "Prospect"
+    ? "What buyer commitment is still missing?"
+    : task.owner === "Ambiguous"
+      ? "Can we confirm owner before this gets calendar space?"
+      : "What is the smallest useful next step?";
+
+const handoffModuleForTask = (task: Task) => {
+  if (task.group === "Meeting Prep And Time-Bound Tasks") return "Pre-Call Brief";
+  if (task.group === "Follow-Ups And Responses") return "Follow-Up Builder";
+  if (task.source === "email" || task.source === "calendar") return "Outlook Live Workbench";
+  return "Sales Router";
+};
+
+const workstreamForTask = (task: Task): AgenticActionStep["workstream"] => {
+  if (task.owner === "Ambiguous") return "Verify";
+  if (task.group === "Meeting Prep And Time-Bound Tasks") return "Prep";
+  if (task.group === "Follow-Ups And Responses") return "Draft";
+  return "Decide";
+};
+
+const statusForTask = (task: Task): AgenticActionStep["status"] => {
+  if (task.owner === "Ambiguous") return "Needs confirmation";
+  if (!task.account || task.account === "Unknown account") return "Blocked";
+  return "Ready";
+};
+
+const taskToAgenticStep = (task: Task, index: number): AgenticActionStep => {
+  const confidence = taskConfidence(task);
+  return {
+    id: `agentic-task-${index + 1}`,
+    workstream: workstreamForTask(task),
+    status: statusForTask(task),
+    account: task.account,
+    contact: task.contact,
+    evidence: task.context,
+    due: task.due,
+    owner: task.owner,
+    priority: task.priority,
+    whyItMatters: task.whyItMatters,
+    recommendedAction: task.concreteNextAction,
+    softCta: softCtaFromTask(task),
+    confidence,
+    source: task.source,
+    originatingModule: task.source === "email" || task.source === "calendar" ? "Outlook Live Sync" : "Daily To-Do",
+    handoffModule: handoffModuleForTask(task),
+    guardrail:
+      confidence === "Low"
+        ? "Confirm owner, account, and evidence before drafting or scheduling."
+        : "Review artifact only; no external send, post, CRM, or Outlook write action."
+  };
+};
+
+const recommendationToAgenticStep = (rec: Recommendation, index: number): AgenticActionStep => ({
+  id: `agentic-rec-${index + 1}`,
+  workstream: rec.originatingModule.includes("Deal") ? "Verify" : "Decide",
+  status: rec.confidence === "Low" ? "Needs confirmation" : "Ready",
+  account: rec.account,
+  contact: rec.contact,
+  evidence: rec.trigger,
+  due: "Next review",
+  owner: "Pat",
+  priority: rec.priority,
+  whyItMatters: rec.whyItMatters,
+  recommendedAction: rec.recommendedAction,
+  softCta: rec.softCta,
+  confidence: rec.confidence,
+  source: rec.source,
+  originatingModule: rec.originatingModule,
+  handoffModule: rec.originatingModule,
+  guardrail:
+    rec.confidence === "Low"
+      ? "Keep as research context until source evidence improves."
+      : "Recommendation is ready for Pat review, not automatic execution."
+});
+
+const dedupeAgenticSteps = (steps: AgenticActionStep[]) => {
+  const seen = new Set<string>();
+  return steps.filter((step) => {
+    const key = `${step.account}|${step.recommendedAction}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const sortAgenticSteps = (steps: AgenticActionStep[]) =>
+  [...steps].sort(
+    (a, b) =>
+      dailyPriorityRank[b.priority] - dailyPriorityRank[a.priority] ||
+      confidenceRank[b.confidence] - confidenceRank[a.confidence]
+  );
+
+const buildReviewArtifacts = (steps: AgenticActionStep[]): AgenticReviewArtifact[] =>
+  steps
+    .filter((step) => step.workstream === "Prep" || step.workstream === "Draft")
+    .slice(0, 3)
+    .map((step, index) => ({
+      id: `agentic-artifact-${index + 1}`,
+      label: step.workstream === "Prep" ? "Meeting prep brief" : "Follow-up draft",
+      account: step.account,
+      source: step.source,
+      content: `${step.recommendedAction} Evidence: ${step.evidence}`,
+      guardrail: "Create the artifact for Pat review only; keep send/write behavior outside this app."
+    }));
+
 const dedupeTasks = (tasks: Task[]): Task[] => {
   const seen = new Set<string>();
   return tasks.filter((task) => {
@@ -1328,4 +1445,107 @@ export const buildDailyTaskManager = (input: DailyTaskManagerInput): DailyTaskMa
   ]);
 
   return { tasks, grouped: groupTasks(tasks), recommendations };
+};
+
+export const buildAgenticCommandPlan = (input: {
+  daily: DailyTaskManager;
+  opportunities: PipelineOpportunity[];
+  accounts: Account[];
+  meetings: Meeting[];
+  outlookPlan?: OutlookIndexPlan;
+}): AgenticCommandPlan => {
+  const taskSteps = input.daily.tasks.map(taskToAgenticStep);
+  const recommendationSteps = input.daily.recommendations
+    .slice(0, 8)
+    .map(recommendationToAgenticStep);
+  const dealSteps = analyzePipeline(input.opportunities)
+    .filter((deal) => deal.posture !== "On track" || deal.reviewGroup !== "Low Priority Cleanup")
+    .map((deal, index): AgenticActionStep => ({
+      id: `agentic-deal-${index + 1}`,
+      workstream: deal.posture === "Could slip" ? "Verify" : "Decide",
+      status: deal.riskScore >= 82 ? "Needs confirmation" : "Ready",
+      account: deal.account,
+      evidence: `${deal.stage}; ${deal.forecast}; ${deal.nextMove}`,
+      due: deal.closeDate,
+      owner: deal.reviewGroup === "Needs Buyer Commitment" ? "Prospect" : "Pat",
+      priority: deal.risk,
+      whyItMatters: deal.whyItMatters,
+      recommendedAction: deal.nextMove,
+      softCta:
+        deal.reviewGroup === "Needs Buyer Commitment"
+          ? "Can we confirm the buyer-owned commitment?"
+          : "Should this move before the next forecast review?",
+      confidence: deal.riskScore >= 70 ? "High" : deal.riskScore >= 38 ? "Medium" : "Low",
+      source: "crm_export",
+      originatingModule: "Deal Journey",
+      handoffModule: "Deal Review Board",
+      guardrail: "Analyze and prepare review notes only; do not change forecast state without Pat approval."
+    }));
+
+  const steps = sortAgenticSteps(
+    dedupeAgenticSteps([...taskSteps, ...recommendationSteps, ...dealSteps])
+  ).slice(0, 7);
+  const ready = steps.filter((step) => step.status === "Ready").length;
+  const needsConfirmation = steps.filter((step) => step.status === "Needs confirmation").length;
+  const blocked = steps.filter((step) => step.status === "Blocked").length;
+  const averageConfidence =
+    steps.length === 0
+      ? 0
+      : steps.reduce((sum, step) => sum + confidenceRank[step.confidence], 0) / steps.length;
+  const readiness: Signal["confidence"] =
+    ready >= 4 && averageConfidence >= 2.35
+      ? "High"
+      : ready >= 2
+        ? "Medium"
+        : "Low";
+  const nextMove = steps[0];
+  const reviewArtifacts = buildReviewArtifacts(steps);
+  const suppressionDecisions = [
+    ...(input.outlookPlan?.suppressionLog.map(
+      (item) => `${item.reason} Evidence: ${item.evidence}`
+    ) ?? []),
+    ...steps
+      .filter((step) => step.confidence === "Low" || step.status === "Blocked")
+      .map((step) => `${step.account}: hold until ${step.guardrail.toLowerCase()}`)
+  ].slice(0, 4);
+  const accountGaps = input.accounts
+    .flatMap((account) => account.researchGaps.map((gap) => `${account.name}: ${gap}`))
+    .slice(0, 3);
+  const evidenceGates = [
+    "Every action preserves whyItMatters, recommendedAction, softCta, confidence, source, and originatingModule.",
+    "Draft and prep outputs stay review-only until a real connector-backed write adapter exists.",
+    input.outlookPlan
+      ? `Outlook evidence state: ${input.outlookPlan.connectorState}; ${input.outlookPlan.stats.writeActions} write actions.`
+      : "No live connector evidence loaded; use local sample and pasted payloads only.",
+    `${input.meetings.length} meetings checked for prep coverage and time-bound tasks.`,
+    ...accountGaps
+  ].slice(0, 6);
+
+  return {
+    id: `agentic-command-${Date.now()}`,
+    generatedAt: new Date().toISOString(),
+    focus: nextMove?.account ?? "Daily command center",
+    readiness,
+    autonomyScore: clamp(ready * 12 + needsConfirmation * 6 + reviewArtifacts.length * 8 + (blocked === 0 ? 10 : 0)),
+    recommendedNextMove: nextMove?.recommendedAction ?? "Load evidence before making an action recommendation.",
+    summary:
+      nextMove
+        ? `${steps.length} ranked moves, ${reviewArtifacts.length} review artifacts, and ${suppressionDecisions.length} suppression decisions are ready for Pat review.`
+        : "No ranked moves yet. Add Outlook, CRM, meeting, or prospect evidence to activate the planner.",
+    steps,
+    evidenceGates,
+    suppressionDecisions,
+    reviewArtifacts,
+    stats: {
+      ready,
+      needsConfirmation,
+      blocked,
+      suppressions: suppressionDecisions.length,
+      reviewArtifacts: reviewArtifacts.length
+    },
+    handoffPrompt:
+      nextMove
+        ? `Start with ${nextMove.account}: ${nextMove.recommendedAction} Route to ${nextMove.handoffModule}; keep execution review-only.`
+        : "No handoff yet."
+  };
 };

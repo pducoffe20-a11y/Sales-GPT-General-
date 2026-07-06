@@ -172,6 +172,69 @@ export interface DailyTaskManager {
   recommendations: Recommendation[];
 }
 
+export type AgenticWorkstream =
+  | "Decide"
+  | "Prep"
+  | "Draft"
+  | "Verify"
+  | "Suppress";
+
+export type AgenticStepStatus =
+  | "Ready"
+  | "Needs confirmation"
+  | "Blocked";
+
+export interface AgenticActionStep {
+  id: string;
+  workstream: AgenticWorkstream;
+  status: AgenticStepStatus;
+  account: string;
+  contact?: string;
+  evidence: string;
+  due: string;
+  owner: Task["owner"];
+  priority: Priority;
+  whyItMatters: string;
+  recommendedAction: string;
+  softCta: string;
+  confidence: Confidence;
+  source: SourceCategory;
+  originatingModule: string;
+  handoffModule: string;
+  guardrail: string;
+}
+
+export interface AgenticReviewArtifact {
+  id: string;
+  label: string;
+  account: string;
+  source: SourceCategory;
+  content: string;
+  guardrail: string;
+}
+
+export interface AgenticCommandPlan {
+  id: string;
+  generatedAt: string;
+  focus: string;
+  readiness: Confidence;
+  autonomyScore: number;
+  recommendedNextMove: string;
+  summary: string;
+  steps: AgenticActionStep[];
+  evidenceGates: string[];
+  suppressionDecisions: string[];
+  reviewArtifacts: AgenticReviewArtifact[];
+  stats: {
+    ready: number;
+    needsConfirmation: number;
+    blocked: number;
+    suppressions: number;
+    reviewArtifacts: number;
+  };
+  handoffPrompt: string;
+}
+
 export interface Brief {
   accountSnapshot: string;
   contactAngle: string;

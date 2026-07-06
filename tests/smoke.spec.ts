@@ -19,6 +19,15 @@ test("dashboard loads and captures desktop screenshot", async ({ page }) => {
   await expect(page.getByTestId("agent-layer-today")).toContainText(
     "Route broad seller questions",
   );
+  await expect(page.getByTestId("agentic-command-plan")).toContainText(
+    "Command Planner",
+  );
+  await expect(page.getByTestId("agentic-command-plan")).toContainText(
+    "Review artifacts",
+  );
+  await expect(page.getByTestId("agentic-command-plan")).toContainText(
+    "review-only",
+  );
   await expect(page.getByTestId("account-workspace")).toContainText(
     "National Assoc. of Shop Owners",
   );

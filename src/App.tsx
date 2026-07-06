@@ -34,6 +34,7 @@ import {
 import { integrationSources, pluginModules } from "./data/pluginRegistry";
 import {
   analyzePipeline,
+  buildAgenticCommandPlan,
   buildAccountRecommendations,
   buildDailyTaskManager,
   buildDealReviewBoard,
@@ -59,6 +60,8 @@ import {
 import type {
   Account,
   AccountResearchRecord,
+  AgenticActionStep,
+  AgenticCommandPlan,
   ImportPurpose,
   LinkedInResearchBrief,
   LinkedInResearchIntent,
@@ -115,6 +118,16 @@ const priorityPill = (p: Priority) =>
 
 const healthPill = (h: Account["health"]) =>
   h === "Good" ? "ok" : h === "Watch" ? "warn" : "danger";
+
+const confidencePill = (c: "High" | "Medium" | "Low") =>
+  c === "High" ? "ok" : c === "Medium" ? "warn" : "danger";
+
+const agenticStatusPill = (status: AgenticActionStep["status"]) =>
+  status === "Ready"
+    ? "ok"
+    : status === "Needs confirmation"
+      ? "warn"
+      : "danger";
 
 const initials = (name: string) =>
   name
@@ -315,6 +328,164 @@ function ModuleAgentLayer({
             <div className="agent-guardrail">{work.guardrail}</div>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function AgenticStepIcon({ step }: { step: AgenticActionStep }) {
+  if (step.workstream === "Prep") return <CalendarClock size={15} />;
+  if (step.workstream === "Draft") return <PenLine size={15} />;
+  if (step.workstream === "Verify") return <Search size={15} />;
+  if (step.workstream === "Suppress") return <Inbox size={15} />;
+  return <ArrowUpRight size={15} />;
+}
+
+function AgenticCommandLayer({ plan }: { plan: AgenticCommandPlan }) {
+  const topMove = plan.steps[0];
+
+  return (
+    <section className="agentic-command" data-testid="agentic-command-plan">
+      <div className="agentic-command-head">
+        <span className="pill accent">
+          <Inbox size={12} /> Agentic layer
+        </span>
+        <div className="agentic-title">
+          <h2>Command Planner</h2>
+          <p>{plan.summary}</p>
+        </div>
+        <div className="agentic-score">
+          <span>Readiness</span>
+          <b>{plan.autonomyScore}</b>
+          <span className={`pill ${confidencePill(plan.readiness)}`}>
+            {plan.readiness}
+          </span>
+        </div>
+      </div>
+
+      <div className="agentic-body">
+        <div className="agentic-prime">
+          <div className="eyebrow">Next best move</div>
+          <h3>{plan.focus}</h3>
+          <p>{plan.recommendedNextMove}</p>
+          {topMove && (
+            <div className="row wrap compact-row">
+              <span className={`pill ${priorityPill(topMove.priority)}`}>
+                {topMove.priority}
+              </span>
+              <span className={`pill ${confidencePill(topMove.confidence)}`}>
+                Confidence · {topMove.confidence}
+              </span>
+              <span className="pill plain">
+                {sourceCategoryShortLabels[topMove.source]}
+              </span>
+            </div>
+          )}
+          <div className="callout teal">{plan.handoffPrompt}</div>
+        </div>
+
+        <div className="agentic-stats" aria-label="Agentic plan stats">
+          <div>
+            <b>{plan.stats.ready}</b>
+            <span>Ready</span>
+          </div>
+          <div>
+            <b>{plan.stats.needsConfirmation}</b>
+            <span>Confirm</span>
+          </div>
+          <div>
+            <b>{plan.stats.reviewArtifacts}</b>
+            <span>Artifacts</span>
+          </div>
+          <div>
+            <b>{plan.stats.suppressions}</b>
+            <span>Suppressed</span>
+          </div>
+        </div>
+
+        <div className="agentic-steps">
+          {plan.steps.slice(0, 4).map((step, index) => (
+            <article className="agentic-step-card" key={step.id}>
+              <div className="agentic-step-icon">
+                <AgenticStepIcon step={step} />
+              </div>
+              <div>
+                <div className="agentic-step-top">
+                  <span className="agentic-step-num">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span className="agentic-workstream">{step.workstream}</span>
+                  <span className={`pill ${agenticStatusPill(step.status)}`}>
+                    {step.status}
+                  </span>
+                </div>
+                <h3>{step.account}</h3>
+                <p>{step.recommendedAction}</p>
+                <div className="agentic-evidence">{step.evidence}</div>
+                <div className="queue-meta">
+                  <span className="pill plain">{step.originatingModule}</span>
+                  <span className="pill plain">Owner · {step.owner}</span>
+                  <span className="pill plain">Due · {step.due}</span>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="agentic-lower">
+        <div>
+          <div className="subhead" style={{ marginTop: 0 }}>
+            Evidence gates
+          </div>
+          <ul className="rulelist">
+            {plan.evidenceGates.slice(0, 4).map((gate) => (
+              <li key={gate}>
+                <span className="mk">✓</span>
+                <span>{gate}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <div className="subhead" style={{ marginTop: 0 }}>
+            Review artifacts
+          </div>
+          {plan.reviewArtifacts.length === 0 ? (
+            <div className="empty-state compact-empty">No draft artifacts queued.</div>
+          ) : (
+            <div className="agentic-artifacts">
+              {plan.reviewArtifacts.map((artifact) => (
+                <div className="agentic-artifact" key={artifact.id}>
+                  <b>{artifact.label}</b>
+                  <span>{artifact.account}</span>
+                  <p>{artifact.content}</p>
+                  <div className="agent-guardrail">{artifact.guardrail}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="subhead" style={{ marginTop: 0 }}>
+            Suppression decisions
+          </div>
+          <ul className="rulelist deny">
+            {plan.suppressionDecisions.length === 0 ? (
+              <li>
+                <span className="mk">×</span>
+                <span>No suppressions in this plan.</span>
+              </li>
+            ) : (
+              plan.suppressionDecisions.map((decision) => (
+                <li key={decision}>
+                  <span className="mk">×</span>
+                  <span>{decision}</span>
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
       </div>
     </section>
   );
@@ -1059,6 +1230,17 @@ function TodayView({
       }),
     [outlookPlan],
   );
+  const agenticPlan = useMemo(
+    () =>
+      buildAgenticCommandPlan({
+        daily,
+        opportunities: pipeline,
+        accounts,
+        meetings,
+        outlookPlan,
+      }),
+    [daily, outlookPlan],
+  );
   const grouped = daily.grouped;
   const dailyRecommendations = daily.recommendations;
 
@@ -1093,6 +1275,8 @@ function TodayView({
           {overdue > 0 && <div className="d pill danger">Needs a move</div>}
         </div>
       </div>
+
+      <AgenticCommandLayer plan={agenticPlan} />
 
       <Panel
         eyebrow="Visual scan"
