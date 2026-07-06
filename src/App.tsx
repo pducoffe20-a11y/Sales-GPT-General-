@@ -34,6 +34,9 @@ import {
 import { integrationSources, pluginModules } from "./data/pluginRegistry";
 import {
   analyzePipeline,
+  buildAccountRecommendations,
+  buildAccountSignals,
+  buildDailyTaskManager,
   buildFollowUpDraft,
   buildLinkedInResearchBrief,
   buildMeetingBrief,
@@ -781,7 +784,12 @@ function TodayView({
   const focus = accounts.find((a) => a.id === selectedId) ?? accounts[0];
   const openPipeline = pipeline.reduce((sum, o) => sum + o.amount, 0);
   const overdue = accounts.filter((a) => a.nextTouchDue === "Overdue").length;
-  const grouped = groupTasks(tasks);
+  const accountSignals = useMemo(() => buildAccountSignals(accounts), []);
+  const pipelineSignals = useMemo(() => analyzePipeline(pipeline).map((row) => row.signal), []);
+  const dailySignals = useMemo(() => [...accountSignals, ...pipelineSignals], [accountSignals, pipelineSignals]);
+  const dailyTasks = useMemo(() => buildDailyTaskManager(dailySignals), [dailySignals]);
+  const dailyRecommendations = useMemo(() => buildAccountRecommendations(accounts), []);
+  const grouped = groupTasks(dailyTasks.length ? dailyTasks : tasks);
 
   return (
     <div className="view">
@@ -823,7 +831,7 @@ function TodayView({
       <div className="grid grid-2">
         <Panel eyebrow="Ranked queue" title="Highest-Priority Next Actions" tight>
           <div className="queue">
-            {todayRecommendations.map((rec, i) => (
+            {(dailyRecommendations.length ? dailyRecommendations : todayRecommendations).map((rec, i) => (
               <div className="queue-item" key={rec.id}>
                 <div className="queue-rank">{String(i + 1).padStart(2, "0")}</div>
                 <div>
