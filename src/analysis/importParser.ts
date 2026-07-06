@@ -1,4 +1,5 @@
 import type {
+  AccountResearchRecord,
   CanonicalImportField,
   ImportProfile,
   ImportPurpose,
@@ -221,7 +222,102 @@ const escapeCsv = (value: string | number | null | undefined) => {
   return /[",\n]/.test(stringValue) ? `"${stringValue.replace(/"/g, '""')}"` : stringValue;
 };
 
-const buildExportCsv = (records: ProspectRecord[]) => {
+const moneyValue = (text: string) => {
+  const matches = text.match(/\$[\d,]+(?:\.\d+)?/g) ?? [];
+  return matches.reduce((max, value) => Math.max(max, Number(value.replace(/[$,]/g, "")) || 0), 0);
+};
+
+const numberValueBefore = (text: string, terms: string[]) => {
+  const lower = text.toLowerCase();
+  const values = terms.flatMap((term) => {
+    const pattern = new RegExp(`([\\d,]+)\\s+(?:active\\s+)?(?:users\\/)?(?:members|learners|${term})`, "gi");
+    return Array.from(lower.matchAll(pattern)).map((match) => Number(match[1].replace(/,/g, "")) || 0);
+  });
+  return values.reduce((max, value) => Math.max(max, value), 0);
+};
+
+const extractEvidenceSentences = (text: string) =>
+  text
+    .split(/\.\s+/)
+    .map((sentence) => sentence.trim().replace(/\.$/, ""))
+    .filter(Boolean);
+
+const isTargetAccountImport = (rows: Record<string, string>[], sourceName: string) => {
+  const source = sourceName.toLowerCase();
+  const sample = rows.slice(0, 8).map((row) => Object.values(row).join(" ").toLowerCase()).join(" ");
+  return source.includes("target account") || sample.includes("target account") || sample.includes("gold-tier target");
+};
+
+const analyzeTargetAccountRow = (row: Record<string, string>, index: number): AccountResearchRecord => {
+  const accountName = row.organization || row.account || row.company || row.account_name || `Imported account ${index + 1}`;
+  const contact = row.contact || row.full_name || row.name || "";
+  const title = row.title || row.role || "";
+  const vertical = row.vertical || row.industry || row.segment || "";
+  const notes = row.notes || row.context || row.evidence || "";
+  const sourceText = `${accountName} ${contact} ${title} ${vertical} ${notes}`;
+  const lower = sourceText.toLowerCase();
+  const revenue = moneyValue(sourceText);
+  const audience = numberValueBefore(sourceText, ["member", "learner"]);
+  const isMemberOrg = /association|society|institute|bar|college|member|training|cpa|credential|certified/i.test(sourceText);
+  const hasTrainingSignal = /training|learner|education|certification|credential|ce|cpe|professional development/i.test(sourceText);
+  const hasTier = /gold|silver|bronze|tier/i.test(sourceText);
+  const hasActivity = /last activity|renewal|budget|initiative|launch|opportunity/i.test(sourceText);
+  const score = Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(35 + (hasTier ? 18 : 0) + (isMemberOrg ? 16 : 0) + (hasTrainingSignal ? 16 : 0) + (revenue >= 10000000 ? 10 : 0) + (audience >= 20000 ? 10 : 0) + (hasActivity ? 8 : 0))
+    )
+  );
+  const status = score >= 72 ? "Work Now" : score >= 52 ? "Research First" : "Defer";
+  const publicEvidence = [
+    ...extractEvidenceSentences(notes).slice(0, 4),
+    vertical ? `Imported segment: ${vertical}` : ""
+  ].filter(Boolean);
+  const knownContacts = contact ? [`${contact}${title ? ` · ${title}` : ""}`] : [];
+  const linkedinSignals = [
+    "Check Sales Navigator for education, certification, learning operations, membership, and executive sponsors.",
+    knownContacts.length ? "Validate imported contact remit before outreach." : "Find likely VP/Director Education, Membership, Certification, or Operations contacts."
+  ];
+  const pipelineConnections = [
+    lower.includes("last activity") ? "Imported target list includes last-activity context." : "No pipeline activity included in this row.",
+    lower.includes("owner: pat") ? "Pat is listed as owner in the imported territory file." : "Confirm owner/account assignment before working."
+  ];
+  const whyNow = [
+    hasTier ? "Territory file marks this as a tiered target account." : "Target priority tier is not explicit.",
+    revenue ? `Revenue signal (${new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(revenue)}) suggests capacity to evaluate a learning platform.` : "Revenue capacity was not imported.",
+    audience ? `Imported audience scale (${audience.toLocaleString()} members/learners) can justify member training discovery.` : "Audience scale is missing."
+  ];
+  const researchGaps = [
+    knownContacts.length === 0 ? "No named buyer/contact imported." : "Confirm this contact owns learning or membership outcomes.",
+    !hasActivity ? "No recent activity or timing trigger imported." : "Turn last-activity date into a current trigger before outreach.",
+    !/lms|platform|learning system|brightspace/i.test(sourceText) ? "Current LMS/platform is unknown." : "Validate platform pain with a current source.",
+    "Find public proof of CE, certification, member education, or training programs."
+  ];
+  return {
+    accountName,
+    importedFields: row,
+    icpFit: {
+      status,
+      score,
+      rationale: isMemberOrg
+        ? "Looks like a member, credential, education, or professional association target with enough scale to research."
+        : "Imported row has target-list value, but member-training fit needs validation."
+    },
+    verticalFit: vertical || (isMemberOrg ? "Association / member education target" : "Vertical not imported"),
+    memberTrainingFit: hasTrainingSignal || audience ? "Likely worth testing for member training, CE, certification, or learner-scale use cases." : "Training fit is plausible but not proven from the imported row.",
+    publicEvidence,
+    knownContacts,
+    linkedinSignals,
+    pipelineConnections,
+    whyNow,
+    researchGaps,
+    nextBestMove: status === "Work Now" ? "Research the account page and LinkedIn buyer map, then draft a review-safe first touch around member education scale." : status === "Research First" ? "Spend 10 minutes validating learning programs, current platform, and one buyer before outreach." : "Do not work yet; enrich account fit and contacts first.",
+    confidence: publicEvidence.length >= 3 && (knownContacts.length > 0 || audience > 0) ? "High" : publicEvidence.length >= 2 ? "Medium" : "Low"
+  };
+};
+
+const buildProspectExportCsv = (records: ProspectRecord[]) => {
   const headers = ["account", "contact", "title", "status", "score", "why_it_matters", "recommended_action", "soft_cta"];
   const rows = records.map((record) => [
     record.organization,
@@ -232,6 +328,20 @@ const buildExportCsv = (records: ProspectRecord[]) => {
     record.recommendedActions[0]?.whyItMatters,
     record.recommendedActions[0]?.recommendedAction,
     record.recommendedActions[0]?.softCta
+  ]);
+  return [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\n");
+};
+
+const buildAccountResearchExportCsv = (records: AccountResearchRecord[]) => {
+  const headers = ["account", "fit_status", "fit_score", "confidence", "what_we_know", "research_gaps", "next_best_move"];
+  const rows = records.map((record) => [
+    record.accountName,
+    record.icpFit.status,
+    record.icpFit.score,
+    record.confidence,
+    record.publicEvidence.join(" | "),
+    record.researchGaps.join(" | "),
+    record.nextBestMove
   ]);
   return [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\n");
 };
@@ -284,21 +394,36 @@ export const buildProspectUpload = (
 
   const profile = profileImportRows(rows, columns, delimiter, purpose, mappingOverrides);
   const normalizedRows = normalizeRowsForAnalysis(rows, profile.mappedFields);
-  const records: ProspectRecord[] = normalizedRows.map((row, index) => analyzeProspectRow(row, index, sourceType, purpose));
-  const workNow = records.filter((record) => record.status === "Work Now").length;
-  const lightResearch = records.filter((record) => record.status === "Light Research").length;
-  const suppress = records.filter((record) => record.status === "Suppress").length;
-  const commonThemes = Array.from(
-    new Set(records.flatMap((record) => record.inferredPains).filter(Boolean))
-  ).slice(0, 4);
+  const shouldBuildAccountQueue = purpose === "prospect_research" && isTargetAccountImport(normalizedRows, sourceName);
+  const accountResearchRecords: AccountResearchRecord[] = shouldBuildAccountQueue
+    ? normalizedRows.map((row, index) => analyzeTargetAccountRow(row, index))
+    : [];
+  const records: ProspectRecord[] = shouldBuildAccountQueue
+    ? []
+    : normalizedRows.map((row, index) => analyzeProspectRow(row, index, sourceType, purpose));
+  const workNow = shouldBuildAccountQueue
+    ? accountResearchRecords.filter((record) => record.icpFit.status === "Work Now").length
+    : records.filter((record) => record.status === "Work Now").length;
+  const lightResearch = shouldBuildAccountQueue
+    ? accountResearchRecords.filter((record) => record.icpFit.status === "Research First").length
+    : records.filter((record) => record.status === "Light Research").length;
+  const suppress = shouldBuildAccountQueue
+    ? accountResearchRecords.filter((record) => record.icpFit.status === "Defer").length
+    : records.filter((record) => record.status === "Suppress").length;
+  const commonThemes = shouldBuildAccountQueue
+    ? Array.from(new Set(accountResearchRecords.map((record) => record.memberTrainingFit))).slice(0, 4)
+    : Array.from(new Set(records.flatMap((record) => record.inferredPains).filter(Boolean))).slice(0, 4);
   const evidenceGaps = Array.from(
     new Set([
-      ...records.flatMap((record) => record.unknowns).filter(Boolean),
+      ...(shouldBuildAccountQueue
+        ? accountResearchRecords.flatMap((record) => record.researchGaps)
+        : records.flatMap((record) => record.unknowns).filter(Boolean)),
       ...profile.missingRecommendedFields.map((field) => `${canonicalFieldLabels[field]} was not mapped.`)
     ])
   ).slice(0, 6);
+  const total = shouldBuildAccountQueue ? accountResearchRecords.length : records.length;
   const handoffPrompt = buildHandoffPrompt(purpose, sourceName, profile);
-  const exportCsv = buildExportCsv(records);
+  const exportCsv = shouldBuildAccountQueue ? buildAccountResearchExportCsv(accountResearchRecords) : buildProspectExportCsv(records);
   const handoffJson = JSON.stringify(
     {
       sourceName,
@@ -306,8 +431,9 @@ export const buildProspectUpload = (
       purpose,
       profile,
       records,
+      accountResearchRecords,
       boardSummary: {
-        total: records.length,
+        total,
         workNow,
         lightResearch,
         suppress,
@@ -329,9 +455,10 @@ export const buildProspectUpload = (
     originalRows: rows,
     profile,
     records,
+    accountResearchRecords,
     parseWarnings: warnings,
     boardSummary: {
-      total: records.length,
+      total,
       workNow,
       lightResearch,
       suppress,
