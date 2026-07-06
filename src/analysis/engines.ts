@@ -269,6 +269,22 @@ export const analyzeProspectRow = (
     whyItMatters: purposeCopy.whyItMatters,
     originatingModule: purposeCopy.originatingModule
   };
+  const linkedinBrief = sourceType === "linkedin" || sourceType === "sales_navigator" || sourceText.includes("linkedin.com")
+    ? buildLinkedInResearchBrief({
+        intent: purpose === "prospect_research" ? "person_research" : "account_research",
+        accountName: organization ?? "",
+        personName: fullName ?? "",
+        title: title ?? "",
+        profileUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/in/", "/sales/lead/"]),
+        companyUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/company/", "/sales/company/"]),
+        searchUrl: firstUrlByPath(extractLinkedInUrls(sourceText), ["/search/", "/sales/search/"]),
+        listName: organization ? `${organization} LinkedIn evidence` : "LinkedIn evidence",
+        limit: "25",
+        icp: vertical,
+        notes: notes || nextStep || stage || ""
+      })
+    : null;
+
   const action: Recommendation = {
     id: `import-rec-${index}`,
     account: organization ?? "Unknown account",
@@ -301,6 +317,15 @@ export const analyzeProspectRow = (
     evidenceNotes: [evidenceNote],
     recommendedActions: [action],
     signals: [signal]
+    linkedinSignals: linkedinBrief?.verifiedSignals,
+    profileEvidence: linkedinBrief ? [
+      linkedinBrief.profileUrl ? `Profile evidence: ${linkedinBrief.profileUrl}` : "Profile evidence still missing.",
+      linkedinBrief.companyUrl ? `Company evidence: ${linkedinBrief.companyUrl}` : "Company evidence still missing."
+    ] : undefined,
+    roleFitEvidence: linkedinBrief?.buyerAngles,
+    recentActivityEvidence: linkedinBrief?.verifiedSignals.filter((signal) => signal.startsWith("Seller note:")),
+    researchConfidenceImpact: linkedinBrief ? `LinkedIn evidence moves research confidence to ${linkedinBrief.readiness} (${linkedinBrief.researchScore}/100); use only for read-only research, not invites, messages, reactions, comments, posts, or writes.` : undefined,
+    recommendedActions: [action]
   };
 };
 
@@ -1149,6 +1174,79 @@ export const buildAccountSignals = (accounts: Account[]): Signal[] =>
       originatingModule: "Sales Router"
     };
   });
+export const dealReviewGroupNames = [
+  "Needs Pat Action",
+  "Needs Buyer Commitment",
+  "Forecast Risk",
+  "Manager Review Notes",
+  "Low Priority Cleanup"
+] as const;
+
+export type DealReviewGroupName = (typeof dealReviewGroupNames)[number];
+
+export type AnalyzedPipelineDeal = PipelineOpportunity & {
+  riskScore: number;
+  posture: "Could slip" | "Watch closely" | "On track";
+  reviewGroup: DealReviewGroupName;
+  managerNote: string;
+};
+
+const buyerCommitmentPattern = /buyer|prospect|client|customer|committee|stakeholder|executive|send|review|availability|calendar|intro|discovery|demo|session|call|meeting|commitment|mutual/i;
+const patActionPattern = /follow up|send availability|send .*literature|get back|re-book|book|schedule|confirm|qualify|review|proposal|sample courses|business case/i;
+const cleanupPattern = /tbd|placeholder|no amount|no next step|zoominfo|sourced lead|first substantive/i;
+
+const analyzePipelineDeal = (opportunity: PipelineOpportunity): AnalyzedPipelineDeal => {
+  const riskScore =
+    (opportunity.probability < 45 ? 30 : 0) +
+    (opportunity.probability < 20 ? 12 : 0) +
+    (opportunity.amount === 0 ? 18 : 0) +
+    (opportunity.forecast === "At Risk" ? 22 : 0) +
+    (opportunity.risk === "High" ? 35 : opportunity.risk === "Medium" ? 20 : 5) +
+    (/overdue|stalled|security|procurement|placeholder|tbd|rescheduled/i.test(opportunity.nextMove) ? 18 : 0);
+  const posture = riskScore >= 70 ? "Could slip" : riskScore >= 38 ? "Watch closely" : "On track";
+  const dealText = `${opportunity.stage} ${opportunity.nextMove} ${opportunity.whyItMatters}`;
+  const reviewGroup: DealReviewGroupName =
+    cleanupPattern.test(dealText) || (opportunity.amount === 0 && opportunity.probability <= 15)
+      ? "Low Priority Cleanup"
+      : opportunity.forecast === "At Risk" || riskScore >= 82
+        ? "Forecast Risk"
+        : patActionPattern.test(dealText)
+          ? "Needs Pat Action"
+          : buyerCommitmentPattern.test(dealText)
+            ? "Needs Buyer Commitment"
+            : "Manager Review Notes";
+  const managerNote = `${reviewGroup} · ${posture}: ${opportunity.whyItMatters}`;
+
+  return {
+    ...opportunity,
+    riskScore,
+    posture,
+    reviewGroup,
+    managerNote
+  };
+};
+
+export const analyzePipeline = (opportunities: PipelineOpportunity[]) => opportunities.map(analyzePipelineDeal);
+
+export const buildDealReviewBoard = (opportunities: PipelineOpportunity[]) => {
+  const board = dealReviewGroupNames.reduce<Record<DealReviewGroupName, AnalyzedPipelineDeal[]>>(
+    (groups, groupName) => ({ ...groups, [groupName]: [] }),
+    {} as Record<DealReviewGroupName, AnalyzedPipelineDeal[]>
+  );
+
+  analyzePipeline(opportunities)
+    .sort((a, b) => b.riskScore - a.riskScore || b.amount - a.amount)
+    .forEach((deal) => {
+      board[deal.reviewGroup].push(deal);
+    });
+
+  return dealReviewGroupNames.map((name) => ({
+    name,
+    deals: board[name],
+    totalAmount: board[name].reduce((sum, deal) => sum + deal.amount, 0),
+    weightedAmount: board[name].reduce((sum, deal) => sum + deal.amount * (deal.probability / 100), 0)
+  }));
+};
 
 export const buildAccountRecommendations = (accounts: Account[]): Recommendation[] =>
   buildAccountSignals(accounts)

@@ -1,6 +1,7 @@
 export type Priority = "High" | "Medium" | "Low";
 export type Confidence = "High" | "Medium" | "Low";
 export type ProspectStatus = "Work Now" | "Light Research" | "Suppress";
+export type AccountResearchStatus = "Work Now" | "Research First" | "Defer";
 export type ImportPurpose = "prospect_research" | "pipeline_review" | "task_flow" | "meeting_brief";
 export type CanonicalImportField =
   | "organization"
@@ -77,6 +78,21 @@ export interface Recommendation {
   originatingModule: string;
 }
 
+export interface LinkedInEvidenceLayer {
+  linkedinSignals: string[];
+  profileEvidence: string[];
+  roleFitEvidence: string[];
+  recentActivityEvidence: string[];
+  researchConfidenceImpact: string;
+}
+
+export interface AccountResearchRecord extends LinkedInEvidenceLayer {
+  accountId: string;
+  accountName: string;
+  source: Extract<SourceCategory, "linkedin" | "sales_navigator" | "manual">;
+  generatedAt: string;
+}
+
 export interface Contact {
   id: string;
   accountId: string;
@@ -86,6 +102,11 @@ export interface Contact {
   persona: "Champion" | "Influencer" | "Economic Buyer" | "Technical Buyer" | "Blocker" | "Unknown";
   relationship: "Warm" | "Active" | "New" | "Stalled" | "Unknown";
   notes: string;
+  linkedinSignals?: string[];
+  profileEvidence?: string[];
+  roleFitEvidence?: string[];
+  recentActivityEvidence?: string[];
+  researchConfidenceImpact?: string;
 }
 
 export interface Account {
@@ -107,6 +128,7 @@ export interface Account {
   health: "Good" | "Watch" | "Risk";
   competitors: Competitor[];
   contacts: Contact[];
+  researchRecord?: AccountResearchRecord;
 }
 
 export interface Meeting {
@@ -197,6 +219,27 @@ export interface PipelineOpportunity {
   whyItMatters: string;
 }
 
+
+export interface AccountResearchRecord {
+  accountName: string;
+  importedFields: Record<string, string>;
+  icpFit: {
+    status: AccountResearchStatus;
+    score: number;
+    rationale: string;
+  };
+  verticalFit: string;
+  memberTrainingFit: string;
+  publicEvidence: string[];
+  knownContacts: string[];
+  linkedinSignals: string[];
+  pipelineConnections: string[];
+  whyNow: string[];
+  researchGaps: string[];
+  nextBestMove: string;
+  confidence: Confidence;
+}
+
 export interface ProspectRecord {
   prospectId: string;
   fullName: string | null;
@@ -217,6 +260,11 @@ export interface ProspectRecord {
   unknowns: string[];
   whatToCheckFirst: string[];
   evidenceNotes: string[];
+  linkedinSignals?: string[];
+  profileEvidence?: string[];
+  roleFitEvidence?: string[];
+  recentActivityEvidence?: string[];
+  researchConfidenceImpact?: string;
   recommendedActions: Recommendation[];
   signals: Signal[];
 }
@@ -230,6 +278,7 @@ export interface ProspectUpload {
   originalRows: Record<string, string>[];
   profile: ImportProfile;
   records: ProspectRecord[];
+  accountResearchRecords: AccountResearchRecord[];
   boardSummary: {
     total: number;
     workNow: number;
