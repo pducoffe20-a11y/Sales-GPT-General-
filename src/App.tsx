@@ -34,6 +34,7 @@ import {
 import { integrationSources, pluginModules } from "./data/pluginRegistry";
 import {
   analyzePipeline,
+  buildDealReviewBoard,
   buildFollowUpDraft,
   buildLinkedInResearchBrief,
   buildMeetingBrief,
@@ -87,6 +88,7 @@ type ViewId =
   | "outlook";
 
 type PipelineRow = ReturnType<typeof analyzePipeline>[number];
+type DealReviewGroup = ReturnType<typeof buildDealReviewBoard>[number];
 type ForecastFilter = PipelineOpportunity["forecast"] | "All";
 type RiskFilter = Priority | "All";
 
@@ -973,112 +975,92 @@ function AccountsView({
 
 /* ------------------------------------------------------------ pipeline view */
 
-function PipelineView() {
-  const rows = useMemo(() => analyzePipeline(pipeline), []);
-  const [forecastFilter, setForecastFilter] = useState<ForecastFilter>("All");
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
-  const [selectedDealId, setSelectedDealId] = useState(rows[0]?.id ?? "");
-  const visibleRows = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          (forecastFilter === "All" || row.forecast === forecastFilter) &&
-          (riskFilter === "All" || row.risk === riskFilter)
-      ),
-    [forecastFilter, riskFilter, rows]
+function DealReviewGroupCard({ group }: { group: DealReviewGroup }) {
+  const topRisk = group.deals[0]?.riskScore ?? 0;
+
+  return (
+    <section className="deal-board-group" data-testid={`deal-group-${group.name}`}>
+      <div className="deal-board-head">
+        <div>
+          <h3>{group.name}</h3>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {group.deals.length} deals · {fmtMoney(group.totalAmount)} open · {fmtMoney(group.weightedAmount)} weighted
+          </div>
+        </div>
+        <span className={`pill ${topRisk >= 70 ? "danger" : topRisk >= 38 ? "warn" : "ok"}`}>
+          Top risk {topRisk}
+        </span>
+      </div>
+
+      <div className="deal-board-list">
+        {group.deals.map((deal) => (
+          <article key={deal.id} className="deal-board-card">
+            <div className="deal-card-top">
+              <div>
+                <b>{deal.account}</b>
+                <div className="muted">{deal.stage} · closes {deal.closeDate}</div>
+              </div>
+              <div className="deal-card-money">
+                <b>{fmtMoney(deal.amount)}</b>
+                <span>{deal.probability}%</span>
+              </div>
+            </div>
+            <div className="row wrap compact-row">
+              <span className="pill plain">{deal.forecast}</span>
+              <span className={`pill ${priorityPill(deal.risk)}`}>{deal.risk} risk</span>
+              <span className={`pill ${deal.posture === "Could slip" ? "danger" : deal.posture === "Watch closely" ? "warn" : "ok"}`}>
+                {deal.posture}
+              </span>
+            </div>
+            <div className="deal-field">
+              <span>Next move</span>
+              <p>{deal.nextMove}</p>
+            </div>
+            <div className="deal-field">
+              <span>Why it matters</span>
+              <p>{deal.whyItMatters}</p>
+            </div>
+            <div className="callout teal">{deal.managerNote}</div>
+          </article>
+        ))}
+        {group.deals.length === 0 && (
+          <div className="empty-state compact-empty">No deals in this action lane.</div>
+        )}
+      </div>
+    </section>
   );
-  const activeDeal =
-    visibleRows.find((row) => row.id === selectedDealId) ?? visibleRows[0];
-  const selectedVisibleId = activeDeal?.id ?? "";
-  const clearFilters = () => {
-    setForecastFilter("All");
-    setRiskFilter("All");
-  };
+}
+
+function PipelineView() {
+  const board = useMemo(() => buildDealReviewBoard(pipeline), []);
+  const rows = useMemo(() => board.flatMap((group) => group.deals), [board]);
+  const totalOpen = rows.reduce((sum, deal) => sum + deal.amount, 0);
+  const weightedOpen = rows.reduce((sum, deal) => sum + deal.amount * (deal.probability / 100), 0);
+  const actionCount = board
+    .filter((group) => group.name !== "Low Priority Cleanup")
+    .reduce((sum, group) => sum + group.deals.length, 0);
 
   return (
     <div className="view">
       <ViewHead
         eyebrow="Deal journey"
-        title="Pipeline Risk Review"
-        sub="Forecast posture with the reason attached. Risk score blends probability, health, and next-step language so slippage shows up before the forecast call."
+        title="Deal Review Board"
+        sub="Action lanes for Pat's forecast call: what Pat owns, what the buyer needs to commit to, where the forecast can slip, and which records only need cleanup."
       />
       <ModuleAgentLayer moduleIds={["meeting-deal-ops"]} testid="pipeline" />
 
-      <div className="grid grid-2 pipeline-layout">
-        <Panel eyebrow="Forecast lens" title="Pipeline Visual Scan">
-          <PipelineVisualLayer
-            rows={rows}
-            visibleRows={visibleRows}
-            selectedId={selectedVisibleId}
-            forecastFilter={forecastFilter}
-            riskFilter={riskFilter}
-            onSelect={setSelectedDealId}
-            onForecastFilter={setForecastFilter}
-            onRiskFilter={setRiskFilter}
-            onClearFilters={clearFilters}
-          />
-        </Panel>
-
-        <Panel eyebrow="Deal focus" title="Selected Opportunity">
-          <PipelineDealFocus deal={activeDeal} />
-        </Panel>
+      <div className="metric-grid pipeline-summary" data-testid="deal-review-summary">
+        <div className="metric"><span>Action-lane deals</span><b>{actionCount}</b></div>
+        <div className="metric"><span>Open pipeline</span><b>{fmtMoney(totalOpen)}</b></div>
+        <div className="metric"><span>Weighted pipeline</span><b>{fmtMoney(weightedOpen)}</b></div>
+        <div className="metric"><span>Review groups</span><b>{board.length}</b></div>
       </div>
 
-      <Panel eyebrow="Evidence rows" title="Pipeline Table" tight>
-        <div style={{ overflowX: "auto" }}>
-          <table className="table" data-testid="pipeline-table">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th>Stage</th>
-                <th className="r">Amount</th>
-                <th className="r">Prob.</th>
-                <th>Forecast</th>
-                <th>Posture</th>
-                <th>Next move</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((o) => (
-                <tr key={o.id} className={o.id === selectedVisibleId ? "active-row" : ""}>
-                  <td>
-                    <button
-                      className="table-link"
-                      aria-pressed={o.id === selectedVisibleId}
-                      onClick={() => setSelectedDealId(o.id)}
-                    >
-                      {o.account}
-                    </button>
-                    <div className="why">{o.whyItMatters}</div>
-                  </td>
-                  <td>{o.stage}</td>
-                  <td className="r amt">{fmtMoney(o.amount)}</td>
-                  <td className="r num">{o.probability}%</td>
-                  <td>
-                    <span className="pill plain">{o.forecast}</span>
-                  </td>
-                  <td>
-                    <span
-                      className={`pill ${
-                        o.posture === "On track" ? "ok" : o.posture === "Watch closely" ? "warn" : "danger"
-                      }`}
-                    >
-                      {o.posture}
-                    </span>
-                  </td>
-                  <td style={{ maxWidth: 260 }}>{o.nextMove}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {visibleRows.length === 0 && (
-            <div className="empty-state">
-              <div className="big">No deals match</div>
-              Clear a forecast or risk filter to bring records back.
-            </div>
-          )}
-        </div>
-      </Panel>
+      <div className="deal-board" data-testid="pipeline-deal-review-board">
+        {board.map((group) => (
+          <DealReviewGroupCard key={group.name} group={group} />
+        ))}
+      </div>
     </div>
   );
 }
