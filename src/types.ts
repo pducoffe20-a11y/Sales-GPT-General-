@@ -1,6 +1,7 @@
 export type Priority = "High" | "Medium" | "Low";
 export type Confidence = "High" | "Medium" | "Low";
 export type ProspectStatus = "Work Now" | "Light Research" | "Suppress";
+export type AccountResearchStatus = "Work Now" | "Research First" | "Defer";
 export type ImportPurpose = "prospect_research" | "pipeline_review" | "task_flow" | "meeting_brief";
 export type CanonicalImportField =
   | "organization"
@@ -194,6 +195,27 @@ export interface PipelineOpportunity {
   whyItMatters: string;
 }
 
+
+export interface AccountResearchRecord {
+  accountName: string;
+  importedFields: Record<string, string>;
+  icpFit: {
+    status: AccountResearchStatus;
+    score: number;
+    rationale: string;
+  };
+  verticalFit: string;
+  memberTrainingFit: string;
+  publicEvidence: string[];
+  knownContacts: string[];
+  linkedinSignals: string[];
+  pipelineConnections: string[];
+  whyNow: string[];
+  researchGaps: string[];
+  nextBestMove: string;
+  confidence: Confidence;
+}
+
 export interface ProspectRecord {
   prospectId: string;
   fullName: string | null;
@@ -231,6 +253,7 @@ export interface ProspectUpload {
   originalRows: Record<string, string>[];
   profile: ImportProfile;
   records: ProspectRecord[];
+  accountResearchRecords: AccountResearchRecord[];
   boardSummary: {
     total: number;
     workNow: number;

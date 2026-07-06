@@ -56,6 +56,7 @@ import {
 } from "./data/samples";
 import type {
   Account,
+  AccountResearchRecord,
   ImportPurpose,
   LinkedInResearchBrief,
   LinkedInResearchIntent,
@@ -1923,6 +1924,74 @@ function RecordCard({
   );
 }
 
+
+function AccountResearchCard({ record }: { record: AccountResearchRecord }) {
+  return (
+    <div className="rec">
+      <div className="rec-head">
+        <div className="id">
+          <div className="org">{record.accountName}</div>
+          <div className="per">{record.verticalFit}</div>
+        </div>
+        <div>
+          <span className={`pill ${record.icpFit.status === "Work Now" ? "accent" : record.icpFit.status === "Research First" ? "warn" : "plain"}`}>
+            {record.icpFit.status}
+          </span>
+        </div>
+        <div className="rec-score">
+          {record.icpFit.score}
+          <small>FIT</small>
+        </div>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">Is this worth working?</div>
+        <div className="act">{record.icpFit.rationale}</div>
+        <div className="row wrap" style={{ marginTop: 8 }}>
+          <span className="pill plain">Confidence · {record.confidence}</span>
+          <span className="pill plain">Member training fit</span>
+          <span>{record.memberTrainingFit}</span>
+        </div>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">What do we know?</div>
+        <ul className="factlist">
+          {record.publicEvidence.slice(0, 5).map((fact) => <li key={fact}>{fact}</li>)}
+        </ul>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">Who should Pat care about?</div>
+        <div className="chips">
+          {(record.knownContacts.length ? record.knownContacts : record.linkedinSignals).map((contact) => (
+            <span key={contact} className="chip">{contact}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">Why now / pipeline connections</div>
+        <ul className="factlist">
+          {[...record.whyNow, ...record.pipelineConnections].slice(0, 5).map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">What do we still need?</div>
+        <div className="chips">
+          {record.researchGaps.map((gap) => <span key={gap} className="chip">{gap}</span>)}
+        </div>
+      </div>
+
+      <div className="rec-block">
+        <div className="lab">Next useful move</div>
+        <div className="act">{record.nextBestMove}</div>
+      </div>
+    </div>
+  );
+}
+
 function ImportsView() {
   const [sourceName, setSourceName] = useState(
     "PA associations – LMS prospect scan",
@@ -2231,6 +2300,20 @@ function ImportsView() {
                     </a>
                   </div>
 
+                  {upload.accountResearchRecords.length > 0 ? (
+                    <>
+                      <div className="callout info" style={{ marginBottom: 12 }}>
+                        Account Research Queue · target account rows are evaluated as accounts, not people, so Pat can decide what to work, what is known, what is missing, who matters, and the next useful move.
+                      </div>
+                      {upload.accountResearchRecords.map((record) => (
+                        <AccountResearchCard key={record.accountName} record={record} />
+                      ))}
+                    </>
+                  ) : (
+                    upload.records.map((record) => (
+                      <RecordCard key={record.prospectId} record={record} purpose={purpose} />
+                    ))
+                  )}
                   {upload.records.map((record) => (
                     <RecordCard
                       key={record.prospectId}
