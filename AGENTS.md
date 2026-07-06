@@ -17,6 +17,7 @@ This app is a daily D2L Brightspace sales operating system for Pat, not a generi
 - Keep shared contracts in `src/types.ts`.
 - Keep local analysis in `src/analysis/`.
 - Keep sample data in `src/data/mockData.ts`.
+- Keep real import samples/seed strings in `src/data/samples.ts`; the full source CSVs live in `samples/`.
 - Keep plugin/source mapping in `src/data/pluginRegistry.ts`.
 - Maintain dense, scan-friendly UI. Avoid marketing hero pages, purple SaaS gradients, nested cards, and vague sales jargon.
 

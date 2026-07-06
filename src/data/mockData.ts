@@ -308,19 +308,193 @@ export const draftEmails: EmailDraft[] = [
   }
 ];
 
-export const pipeline: PipelineOpportunity[] = accounts.map((account) => ({
-  id: `opp-${account.id}`,
-  accountId: account.id,
-  account: account.name,
-  stage: account.stage,
-  amount: account.amount ?? 0,
-  closeDate: account.nextTouchDue === "Overdue" ? "May 31" : account.nextTouchDue,
-  probability: account.probability ?? 20,
-  forecast: account.health === "Risk" ? "At Risk" : account.probability && account.probability > 70 ? "Best Case" : "Pipeline",
-  risk: account.health === "Good" ? "Low" : account.health === "Watch" ? "Medium" : "High",
-  nextMove: account.nextBestMove,
-  whyItMatters: account.knownPain
-}));
+// Real pipeline: the 14 open opportunities from Pat's Salesforce export
+// (My Open Opportunities). Amounts are Forecast Amount; probability and risk
+// are derived from the Salesforce stage. Full source: samples/open-opportunities-pipeline.csv.
+export const pipeline: PipelineOpportunity[] = [
+  {
+    id: "opp-americanhort",
+    accountId: "acct-americanhort",
+    account: "AmericanHort",
+    stage: "2 - Intention to Move",
+    amount: 35000,
+    closeDate: "Dec 31, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "7/22 - Discovery call after the annual conference.",
+    whyItMatters: "Early-stage LMS opportunity; discovery call scheduled post-conference to confirm learning goals."
+  },
+  {
+    id: "opp-aps",
+    accountId: "acct-aps",
+    account: "American Philatelic Society",
+    stage: "2 - Intention to Move",
+    amount: 34000,
+    closeDate: "Mar 1, 2027",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "5/21 - Demo discovery scheduled; SE alignment complete.",
+    whyItMatters: "Forj is not providing a seamless learning experience. Wants community-driven engagement plus learning-centric design."
+  },
+  {
+    id: "opp-green-pm",
+    accountId: "acct-green-pm",
+    account: "Green Project Management",
+    stage: "2 - Intention to Move",
+    amount: 52650,
+    closeDate: "Sep 30, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "6/22 - Executive demo with the broader team.",
+    whyItMatters: "Limited internal resources, a fragmented tool stack forcing manual updates, and no LTI integration."
+  },
+  {
+    id: "opp-jump",
+    accountId: "acct-jump",
+    account: "Justice & Upward Mobility Project",
+    stage: "4 - Decision Point",
+    amount: 39247,
+    closeDate: "Aug 8, 2026",
+    probability: 70,
+    forecast: "Best Case",
+    risk: "Low",
+    nextMove: "6/17 - Demo call with Cory.",
+    whyItMatters: "No existing LMS; a one-year-old nonprofit building core capabilities and new professional-development programs."
+  },
+  {
+    id: "opp-cape-cod",
+    accountId: "acct-cape-cod",
+    account: "Cape Cod Cranberry Growers' Association",
+    stage: "2 - Intention to Move",
+    amount: 35000,
+    closeDate: "Dec 12, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "6/24 - Intro call.",
+    whyItMatters: "Manual certificate emailing after every training and no centralized learning infrastructure."
+  },
+  {
+    id: "opp-masscpa",
+    accountId: "acct-masscpa",
+    account: "Massachusetts Society of Certified Public Accountants",
+    stage: "1 - Motivation to Move",
+    amount: 35000,
+    closeDate: "Nov 6, 2026",
+    probability: 15,
+    forecast: "Pipeline",
+    risk: "High",
+    nextMove: "Follow up (ZoomInfo-sourced lead).",
+    whyItMatters: "Early motivation-stage account; qualify learning need and buying committee before advancing."
+  },
+  {
+    id: "opp-nadona",
+    accountId: "acct-nadona",
+    account: "The National Association of Directors of Nursing Administration",
+    stage: "1 - Motivation to Move",
+    amount: 35000,
+    closeDate: "Dec 3, 2026",
+    probability: 15,
+    forecast: "Pipeline",
+    risk: "High",
+    nextMove: "Late July intro session.",
+    whyItMatters: "Early motivation-stage account; intro session pending to establish learning priorities."
+  },
+  {
+    id: "opp-nysvms",
+    accountId: "acct-nysvms",
+    account: "New York State Veterinary Medical Society",
+    stage: "1 - Motivation to Move",
+    amount: 0,
+    closeDate: "Dec 31, 2026",
+    probability: 15,
+    forecast: "At Risk",
+    risk: "High",
+    nextMove: "tbd - needs a first substantive discovery conversation.",
+    whyItMatters: "No amount or next step set yet; the deal is a placeholder until discovery happens."
+  },
+  {
+    id: "opp-ohio-cpa",
+    accountId: "acct-ohio-cpa",
+    account: "The Ohio Society of CPA's",
+    stage: "3 - Solution Proposal and Evaluation",
+    amount: 60000,
+    closeDate: "Sep 23, 2026",
+    probability: 55,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "6/16 - Tiffany to send sample courses for Ruth to review.",
+    whyItMatters: "Unstable current LMS, no future-proof strategy, low engagement, workforce gaps, and HB 238 compliance pressure."
+  },
+  {
+    id: "opp-ons",
+    accountId: "acct-ons",
+    account: "Oncology Nursing Society",
+    stage: "1 - Motivation to Move",
+    amount: 0,
+    closeDate: "Dec 31, 2026",
+    probability: 15,
+    forecast: "At Risk",
+    risk: "High",
+    nextMove: "Get back on Bill's calendar; consult rescheduled 6/15.",
+    whyItMatters: "Early-stage with no amount yet; next step is re-booking time with the buyer."
+  },
+  {
+    id: "opp-pw-training",
+    accountId: "acct-pw-training",
+    account: "PW Training",
+    stage: "2 - Intention to Move",
+    amount: 34000,
+    closeDate: "Dec 31, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "6/16 - Michael to send July availability for a follow-up discovery call.",
+    whyItMatters: "Thinkific may not support the language access, reporting, mobile use, and client-specific delivery they need."
+  },
+  {
+    id: "opp-species360",
+    accountId: "acct-species360",
+    account: "Species 360",
+    stage: "2 - Intention to Move",
+    amount: 64500,
+    closeDate: "Dec 31, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "6/16 - Send availability and literature to Josh to help build the business case.",
+    whyItMatters: "Free Moodle-based LMS creating technical debt; lacks modern AI and personalized learning paths leadership wants."
+  },
+  {
+    id: "opp-trumerit",
+    accountId: "acct-trumerit",
+    account: "CGFNS International",
+    stage: "1 - Motivation to Move",
+    amount: 35000,
+    closeDate: "Dec 26, 2026",
+    probability: 15,
+    forecast: "Pipeline",
+    risk: "High",
+    nextMove: "Disco/Demo next week.",
+    whyItMatters: "Early motivation-stage account; discovery and demo scheduled for next week."
+  },
+  {
+    id: "opp-wtc",
+    accountId: "acct-wtc",
+    account: "Wisconsin Technology Council",
+    stage: "2 - Intention to Move",
+    amount: 57000,
+    closeDate: "Oct 31, 2026",
+    probability: 35,
+    forecast: "Pipeline",
+    risk: "Medium",
+    nextMove: "Discovery call with SE - Monday 6/29.",
+    whyItMatters: "Standing up an AI Readiness Coordination Hub for an NSF-funded project; needs to deliver AI-literacy content at scale."
+  }
+];
 
 export const todayRecommendations: Recommendation[] = [
   {
