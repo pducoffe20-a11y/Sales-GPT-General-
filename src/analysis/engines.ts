@@ -15,6 +15,8 @@ import type {
   ProspectStatus,
   ProspectRecord,
   Recommendation,
+  Signal,
+  SignalType,
   SourceCategory,
   Task
 } from "../types";
@@ -44,6 +46,56 @@ const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 const hasAny = (haystack: string, terms: string[]) => terms.some((term) => haystack.includes(term));
 
 const shellQuote = (value: string) => `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+
+
+const priorityFromConfidence = (confidence: Signal["confidence"]): Priority =>
+  confidence === "High" ? "High" : confidence === "Medium" ? "Medium" : "Low";
+
+const signalToRecommendation = (signal: Signal, index: number, prefix = "signal-rec"): Recommendation => ({
+  id: `${prefix}-${index + 1}`,
+  account: signal.account,
+  contact: signal.contact,
+  trigger: signal.evidence,
+  context: signal.signalType.replace(/_/g, " "),
+  whyItMatters: signal.whyItMatters,
+  recommendedAction: signal.recommendedAction,
+  softCta: "Worth pressure-testing the next step?",
+  priority: priorityFromConfidence(signal.confidence),
+  confidence: signal.confidence,
+  source: signal.source,
+  originatingModule: signal.originatingModule
+});
+
+const signalToTask = (signal: Signal, index: number, due = "Next review"): Task => ({
+  id: `signal-task-${index + 1}`,
+  source: signal.source,
+  context: signal.evidence,
+  account: signal.account,
+  contact: signal.contact,
+  concreteNextAction: signal.recommendedAction,
+  whyItMatters: signal.whyItMatters,
+  due,
+  priority: priorityFromConfidence(signal.confidence),
+  group:
+    signal.signalType === "meeting" || signal.signalType === "deadline"
+      ? "Meeting Prep And Time-Bound Tasks"
+      : signal.confidence === "High"
+        ? "Top Priorities"
+        : signal.source === "email"
+          ? "Follow-Ups And Responses"
+          : "If Time Allows",
+  owner: "Pat"
+});
+
+const signalTypeFromText = (text: string, fallback: SignalType): SignalType => {
+  const lower = text.toLowerCase();
+  if (hasAny(lower, ["renewal"])) return "renewal";
+  if (hasAny(lower, ["deadline", "due", "by ", "before "])) return "deadline";
+  if (hasAny(lower, ["job post", "hiring", "open role"])) return "job_post";
+  if (hasAny(lower, ["news", "announced", "press release"])) return "news";
+  if (hasAny(lower, ["new role", "promoted", "joined", "changed role"])) return "linkedin_change";
+  return fallback;
+};
 
 const recommendationCopy = (
   status: ProspectStatus,
@@ -205,6 +257,18 @@ export const analyzeProspectRow = (
   ].filter(Boolean);
   const purposeCopy = recommendationCopy(status, purpose);
   const evidenceNote = notes || nextStep || stage || dueDate || "Imported row did not include a useful evidence note.";
+  const signal: Signal = {
+    source: sourceType,
+    account: organization ?? "Unknown account",
+    contact: fullName ?? undefined,
+    opportunityId: getField(row, ["opportunity_id", "opp_id", "deal_id"]) || undefined,
+    signalType: purpose === "pipeline_review" ? signalTypeFromText(sourceText, "pipeline_risk") : signalTypeFromText(sourceText, "target_account_fit"),
+    evidence: evidenceNote,
+    confidence: evidence >= 75 ? "High" : evidence >= 50 ? "Medium" : "Low",
+    recommendedAction: purposeCopy.recommendedAction,
+    whyItMatters: purposeCopy.whyItMatters,
+    originatingModule: purposeCopy.originatingModule
+  };
   const linkedinBrief = sourceType === "linkedin" || sourceType === "sales_navigator" || sourceText.includes("linkedin.com")
     ? buildLinkedInResearchBrief({
         intent: purpose === "prospect_research" ? "person_research" : "account_research",
@@ -251,6 +315,8 @@ export const analyzeProspectRow = (
     unknowns,
     whatToCheckFirst: unknowns.slice(0, 2),
     evidenceNotes: [evidenceNote],
+    recommendedActions: [action],
+    signals: [signal]
     linkedinSignals: linkedinBrief?.verifiedSignals,
     profileEvidence: linkedinBrief ? [
       linkedinBrief.profileUrl ? `Profile evidence: ${linkedinBrief.profileUrl}` : "Profile evidence still missing.",
@@ -347,6 +413,20 @@ export const buildLinkedInResearchBrief = (input: {
     "Route usable findings into Prospect Strategy, Meeting Prep, or Pat Voice rather than sending from the research screen."
   ];
 
+  const signals: Signal[] = [
+    {
+      source: isNavigator ? "sales_navigator" : "linkedin",
+      account: accountLabel,
+      contact: personLabel === "Unknown contact" ? undefined : personLabel,
+      signalType: signalTypeFromText(sourceText, input.intent === "growth_pipeline" ? "target_account_fit" : "linkedin_change"),
+      evidence: verifiedSignals[0] ?? input.notes ?? "LinkedIn research input",
+      confidence: readiness,
+      recommendedAction: safeNextActions[0],
+      whyItMatters: buyerAngles[0] ?? "LinkedIn evidence should be verified before it becomes outreach or meeting prep.",
+      originatingModule: "LinkedIn Research"
+    }
+  ];
+
   const commandPlans = [
     profileUrl
       ? {
@@ -402,6 +482,7 @@ export const buildLinkedInResearchBrief = (input: {
     buyerAngles,
     evidenceGaps,
     safeNextActions,
+    signals,
     commandPlans,
     growthPipeline: {
       importPhase: [
@@ -682,49 +763,27 @@ const parseConnectorPayload = (connectorJson: string, accountTerms: string[]) =>
   }
 };
 
-const buildMessageTask = (message: OutlookIndexedMessage, index: number): Task => {
-  const evidence = message.preview || message.subject;
-  return {
-    id: `outlook-email-task-${index + 1}`,
-    source: "email",
-    context: `Email: ${message.subject}`,
-    account: message.account,
-    contact: message.sender,
-    concreteNextAction: actionFromText(message.subject, message.preview, message.account),
-    whyItMatters: evidence || "Outlook connector surfaced this as a recent customer/prospect signal.",
-    due: extractDue(`${message.subject} ${message.preview}`, message.receivedAt || "Next review"),
-    priority: message.signalStrength,
-    group: message.signalStrength === "High" ? "Top Priorities" : "Follow-Ups And Responses",
-    owner: ownerFromText(`${message.subject} ${message.preview}`)
-  };
-};
-
-const buildEventTask = (event: OutlookIndexedEvent, index: number): Task => ({
-  id: `outlook-calendar-task-${index + 1}`,
-  source: "calendar",
-  context: `Calendar: ${event.title}`,
-  account: event.account,
-  contact: event.organizer,
-  concreteNextAction: `Prep for ${event.title} and confirm the useful next step before the meeting.`,
-  whyItMatters: `${event.start || "Scheduled meeting"} with ${event.organizer}; attendee state ${event.responseState}.`,
-  due: event.start || "Before meeting",
-  priority: event.signalStrength === "Low" ? "Medium" : event.signalStrength,
-  group: "Meeting Prep And Time-Bound Tasks",
-  owner: "Pat"
+const messageToSignal = (message: OutlookIndexedMessage): Signal => ({
+  source: "email",
+  account: message.account,
+  contact: message.sender,
+  signalType: signalTypeFromText(`${message.subject} ${message.preview}`, "email_ask"),
+  evidence: message.preview || message.subject,
+  confidence: message.signalStrength === "Low" ? "Medium" : "High",
+  recommendedAction: actionFromText(message.subject, message.preview, message.account),
+  whyItMatters: message.preview || "Outlook connector surfaced this as a recent customer/prospect signal.",
+  originatingModule: "Outlook Live Sync"
 });
 
-const recommendationFromTask = (task: Task, index: number): Recommendation => ({
-  id: `outlook-rec-${index + 1}`,
-  account: task.account,
-  contact: task.contact,
-  trigger: task.context,
-  context: task.whyItMatters,
-  whyItMatters: task.whyItMatters,
-  recommendedAction: task.concreteNextAction,
-  softCta: task.source === "calendar" ? "What should be true by the end of the meeting?" : "Worth a quick, specific reply?",
-  priority: task.priority,
-  confidence: task.owner === "Ambiguous" ? "Medium" : "High",
-  source: task.source,
+const eventToSignal = (event: OutlookIndexedEvent): Signal => ({
+  source: "calendar",
+  account: event.account,
+  contact: event.organizer,
+  signalType: "meeting",
+  evidence: `${event.title} · ${event.start || "Scheduled meeting"}`,
+  confidence: event.signalStrength === "Low" ? "Medium" : "High",
+  recommendedAction: `Prep for ${event.title} and confirm the useful next step before the meeting.`,
+  whyItMatters: `${event.start || "Scheduled meeting"} with ${event.organizer}; attendee state ${event.responseState}.`,
   originatingModule: "Outlook Live Sync"
 });
 
@@ -762,12 +821,13 @@ export const buildOutlookIndexPlan = (input: {
     .filter((item) => item.reason);
   const messageIndex = parsedConnector.messages.filter((message) => !messageSuppressionReason(message));
   const eventIndex = parsedConnector.events.filter((event) => !eventSuppressionReason(event));
-  const taskCandidates = [
+  const signals = [
     ...messageIndex
       .filter((message) => message.signalStrength !== "Low" || ownerFromText(`${message.subject} ${message.preview}`) !== "Ambiguous")
-      .map(buildMessageTask),
-    ...eventIndex.map(buildEventTask)
-  ].sort((a, b) => {
+      .map(messageToSignal),
+    ...eventIndex.map(eventToSignal)
+  ];
+  const taskCandidates = signals.map((signal, index) => signalToTask(signal, index, extractDue(signal.evidence, signal.signalType === "meeting" ? "Before meeting" : "Next review"))).sort((a, b) => {
     const rank = { High: 3, Medium: 2, Low: 1 };
     return rank[b.priority] - rank[a.priority];
   });
@@ -949,8 +1009,9 @@ export const buildOutlookIndexPlan = (input: {
     ],
     messageIndex,
     eventIndex,
+    signals,
     taskCandidates,
-    liveRecommendations: taskCandidates.map(recommendationFromTask),
+    liveRecommendations: signals.map((signal, index) => signalToRecommendation(signal, index, "outlook-rec")),
     suppressionLog,
     parseWarnings: parsedConnector.warnings,
     handoffJson: JSON.stringify(handoff, null, 2)
@@ -1071,6 +1132,48 @@ export const reviewPatVoice = (copy: string) => {
   };
 };
 
+export const analyzePipeline = (opportunities: PipelineOpportunity[]) =>
+  opportunities.map((opportunity) => {
+    const riskScore =
+      (opportunity.probability < 45 ? 30 : 0) +
+      (opportunity.risk === "High" ? 35 : opportunity.risk === "Medium" ? 20 : 5) +
+      (/overdue|stalled|security|procurement/i.test(opportunity.nextMove) ? 18 : 0);
+    const posture = riskScore >= 55 ? "Could slip" : riskScore >= 32 ? "Watch closely" : "On track";
+    const signal: Signal = {
+      source: "manual",
+      account: opportunity.account,
+      opportunityId: opportunity.id,
+      signalType: signalTypeFromText(`${opportunity.stage} ${opportunity.closeDate} ${opportunity.nextMove} ${opportunity.whyItMatters}`, "pipeline_risk"),
+      evidence: `${opportunity.stage}; ${opportunity.nextMove}`,
+      confidence: riskScore >= 55 ? "High" : riskScore >= 32 ? "Medium" : "Low",
+      recommendedAction: opportunity.nextMove,
+      whyItMatters: opportunity.whyItMatters,
+      originatingModule: "Deal Journey"
+    };
+    return {
+      ...opportunity,
+      riskScore,
+      posture,
+      managerNote: `${posture}: ${signal.whyItMatters}`,
+      signal
+    };
+  });
+
+export const buildAccountSignals = (accounts: Account[]): Signal[] =>
+  accounts.map((account): Signal => {
+    const score = clamp(account.fitScore * 0.45 + account.timingScore * 0.35 + (account.health === "Good" ? 20 : 8));
+    return {
+      source: "manual",
+      account: account.name,
+      contact: account.contacts[0]?.name,
+      signalType: signalTypeFromText(`${account.stage} ${account.knownPain} ${account.nextBestMove}`, "target_account_fit"),
+      evidence: `${account.stage}; last touch: ${account.lastTouch}`,
+      confidence: account.researchGaps.length > 1 ? "Medium" : score >= 68 ? "High" : "Low",
+      recommendedAction: account.nextBestMove,
+      whyItMatters: account.knownPain,
+      originatingModule: "Sales Router"
+    };
+  });
 export const dealReviewGroupNames = [
   "Needs Pat Action",
   "Needs Buyer Commitment",
@@ -1146,25 +1249,16 @@ export const buildDealReviewBoard = (opportunities: PipelineOpportunity[]) => {
 };
 
 export const buildAccountRecommendations = (accounts: Account[]): Recommendation[] =>
-  accounts
-    .map((account): Recommendation => {
-      const score = clamp(account.fitScore * 0.45 + account.timingScore * 0.35 + (account.health === "Good" ? 20 : 8));
-      const priority: Priority = score >= 82 ? "High" : score >= 68 ? "Medium" : "Low";
-      return {
-        id: `acct-rec-${account.id}`,
-        account: account.name,
-        contact: account.contacts[0]?.name,
-        trigger: account.stage,
-        context: account.lastTouch,
-        whyItMatters: account.knownPain,
-        recommendedAction: account.nextBestMove,
-        softCta: "Worth a quick chat to pressure-test the next step?",
-        priority,
-        confidence: account.researchGaps.length > 1 ? "Medium" : "High",
-        source: "manual",
-        originatingModule: "Sales Router"
-      };
-    })
+  buildAccountSignals(accounts)
+    .map((signal, index) => signalToRecommendation(signal, index, "acct-rec"))
+    .sort((a, b) => {
+      const rank = { High: 3, Medium: 2, Low: 1 };
+      return rank[b.priority] - rank[a.priority];
+    });
+
+export const buildDailyTaskManager = (signals: Signal[]): Task[] =>
+  signals
+    .map((signal, index) => signalToTask(signal, index, signal.signalType === "deadline" || signal.signalType === "meeting" ? "Today" : "Next review"))
     .sort((a, b) => {
       const rank = { High: 3, Medium: 2, Low: 1 };
       return rank[b.priority] - rank[a.priority];

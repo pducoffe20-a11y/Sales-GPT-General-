@@ -17,6 +17,17 @@ export type CanonicalImportField =
   | "nextStep"
   | "dueDate"
   | "priority";
+export type SignalType =
+  | "email_ask"
+  | "meeting"
+  | "linkedin_change"
+  | "pipeline_risk"
+  | "target_account_fit"
+  | "deadline"
+  | "renewal"
+  | "job_post"
+  | "news";
+
 export type SourceCategory =
   | "csv_upload"
   | "pasted_notes"
@@ -37,6 +48,19 @@ export interface IntegrationSource {
   plugin: string;
   status: "Live connector" | "Available now" | "Future connector" | "Mock only";
   whatItUnlocks: string;
+}
+
+export interface Signal {
+  source: SourceCategory;
+  account: string;
+  contact?: string;
+  opportunityId?: string;
+  signalType: SignalType;
+  evidence: string;
+  confidence: Confidence;
+  recommendedAction: string;
+  whyItMatters: string;
+  originatingModule: string;
 }
 
 export interface Recommendation {
@@ -242,6 +266,7 @@ export interface ProspectRecord {
   recentActivityEvidence?: string[];
   researchConfidenceImpact?: string;
   recommendedActions: Recommendation[];
+  signals: Signal[];
 }
 
 export interface ProspectUpload {
@@ -297,6 +322,7 @@ export interface LinkedInResearchBrief {
   buyerAngles: string[];
   evidenceGaps: string[];
   safeNextActions: string[];
+  signals: Signal[];
   commandPlans: LinkedInCommandPlan[];
   growthPipeline: {
     importPhase: string[];
@@ -388,6 +414,7 @@ export interface OutlookIndexPlan {
   commandPlans: OutlookIndexCommand[];
   messageIndex: OutlookIndexedMessage[];
   eventIndex: OutlookIndexedEvent[];
+  signals: Signal[];
   taskCandidates: Task[];
   liveRecommendations: Recommendation[];
   suppressionLog: OutlookSuppression[];
