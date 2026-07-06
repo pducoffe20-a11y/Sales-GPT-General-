@@ -34,7 +34,7 @@ export interface IntegrationSource {
   name: string;
   category: SourceCategory;
   plugin: string;
-  status: "Available now" | "Future connector" | "Mock only";
+  status: "Live connector" | "Available now" | "Future connector" | "Mock only";
   whatItUnlocks: string;
 }
 
@@ -263,9 +263,43 @@ export interface OutlookIndexCommand {
   label: string;
   connector: "Outlook Email" | "Outlook Calendar";
   action: string;
+  method: "connector" | "http";
+  endpoint?: string;
   payload: string;
   safety: "Read-only" | "Requires confirmation";
   whenToUse: string;
+}
+
+export interface OutlookIndexedMessage {
+  id: string;
+  subject: string;
+  sender: string;
+  receivedAt: string;
+  preview: string;
+  account: string;
+  sourceLink?: string;
+  signalStrength: Priority;
+}
+
+export interface OutlookIndexedEvent {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  organizer: string;
+  attendees: string[];
+  account: string;
+  responseState: string;
+  sourceLink?: string;
+  signalStrength: Priority;
+}
+
+export interface OutlookSuppression {
+  id: string;
+  sourceId: string;
+  sourceType: "email" | "calendar";
+  reason: string;
+  evidence: string;
 }
 
 export interface OutlookIndexPlan {
@@ -283,7 +317,12 @@ export interface OutlookIndexPlan {
     emailStages: number;
     calendarStages: number;
     writeActions: number;
+    indexedMessages: number;
+    indexedEvents: number;
+    taskCandidates: number;
+    suppressions: number;
   };
+  connectorState: "Ready for live adapter" | "Dynamic evidence loaded" | "Needs connector payload" | "Parse error";
   stages: Array<{
     id: string;
     label: string;
@@ -298,6 +337,12 @@ export interface OutlookIndexPlan {
   evidenceRules: string[];
   suppressionRules: string[];
   commandPlans: OutlookIndexCommand[];
+  messageIndex: OutlookIndexedMessage[];
+  eventIndex: OutlookIndexedEvent[];
+  taskCandidates: Task[];
+  liveRecommendations: Recommendation[];
+  suppressionLog: OutlookSuppression[];
+  parseWarnings: string[];
   handoffJson: string;
 }
 
@@ -336,6 +381,17 @@ export interface AgentOutput {
   handoffPrompt: string;
 }
 
+export interface ModuleAgentWork {
+  id: string;
+  label: string;
+  evidenceInputs: SourceCategory[];
+  reasoning: string;
+  output: string;
+  handoff: string;
+  confidenceRule: string;
+  guardrail: string;
+}
+
 export interface PluginModule {
   id: string;
   displayName: string;
@@ -344,5 +400,6 @@ export interface PluginModule {
   appSection: string;
   purpose: string;
   futureSources: SourceCategory[];
-  v1Behavior: string;
+  currentBehavior: string;
+  agentWork: ModuleAgentWork[];
 }

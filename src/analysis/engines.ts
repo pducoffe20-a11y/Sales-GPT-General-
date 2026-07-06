@@ -5,8 +5,11 @@ import type {
   ImportPurpose,
   LinkedInResearchBrief,
   LinkedInResearchIntent,
+  OutlookIndexedEvent,
+  OutlookIndexedMessage,
   OutlookIndexMode,
   OutlookIndexPlan,
+  OutlookSuppression,
   PipelineOpportunity,
   Priority,
   ProspectStatus,
@@ -408,6 +411,299 @@ const normalizeQueryTerms = (value: string) =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+type JsonRecord = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is JsonRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const stringifyUnknown = (value: unknown): string => {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(stringifyUnknown).filter(Boolean).join(", ");
+  if (isRecord(value)) {
+    const nested =
+      value.name ??
+      value.displayName ??
+      value.address ??
+      value.email ??
+      value.content ??
+      value.dateTime ??
+      value.value;
+    return stringifyUnknown(nested);
+  }
+  return "";
+};
+
+const getPath = (record: JsonRecord, path: string): unknown =>
+  path.split(".").reduce<unknown>((current, part) => (isRecord(current) ? current[part] : undefined), record);
+
+const getStringField = (record: JsonRecord, paths: string[]) => {
+  for (const path of paths) {
+    const value = stringifyUnknown(getPath(record, path));
+    if (value) return value;
+  }
+  return "";
+};
+
+const collectCandidateRecords = (
+  payload: unknown,
+  predicate: (record: JsonRecord) => boolean,
+  depth = 0,
+  seen = new WeakSet<object>()
+): JsonRecord[] => {
+  if (depth > 7 || payload == null) return [];
+  if (typeof payload === "object") {
+    if (seen.has(payload)) return [];
+    seen.add(payload);
+  }
+
+  if (Array.isArray(payload)) {
+    return payload.flatMap((item) => collectCandidateRecords(item, predicate, depth + 1, seen));
+  }
+
+  if (!isRecord(payload)) return [];
+
+  const matches = predicate(payload) ? [payload] : [];
+  return [
+    ...matches,
+    ...Object.values(payload).flatMap((value) => collectCandidateRecords(value, predicate, depth + 1, seen))
+  ];
+};
+
+const uniqueByFingerprint = <T>(items: T[], fingerprint: (item: T) => string) => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = fingerprint(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const looksLikeMessage = (record: JsonRecord) => {
+  const subject = getStringField(record, ["subject", "title"]);
+  const sender = getStringField(record, ["from.emailAddress.address", "from.emailAddress.name", "sender.emailAddress.address", "sender.emailAddress.name", "from", "sender"]);
+  const received = getStringField(record, ["receivedDateTime", "received_at", "received", "date"]);
+  const preview = getStringField(record, ["bodyPreview", "preview", "snippet", "summary", "body.content", "body"]);
+  const hasEventTime = getStringField(record, ["start.dateTime", "start_datetime", "start", "end.dateTime", "end_datetime", "end"]);
+  return Boolean(subject && !hasEventTime && (sender || received || preview));
+};
+
+const looksLikeEvent = (record: JsonRecord) => {
+  const title = getStringField(record, ["subject", "title", "name", "summary"]);
+  const start = getStringField(record, ["start.dateTime", "start_datetime", "start"]);
+  const end = getStringField(record, ["end.dateTime", "end_datetime", "end"]);
+  return Boolean(title && (start || end));
+};
+
+const priorityFromText = (text: string): Priority => {
+  const lower = text.toLowerCase();
+  if (hasAny(lower, ["urgent", "deadline", "due today", "tomorrow", "proposal", "renewal", "executive", "contract", "pricing"])) return "High";
+  if (hasAny(lower, ["follow up", "follow-up", "availability", "pilot", "demo", "review", "next step", "meeting"])) return "Medium";
+  return "Low";
+};
+
+const accountFromText = (text: string, accountTerms: string[]) => {
+  const lower = text.toLowerCase();
+  return accountTerms.find((term) => lower.includes(term.toLowerCase())) ?? accountTerms[0] ?? "Outlook account";
+};
+
+const extractDue = (text: string, fallback: string) => {
+  const dateMatch = text.match(/\b(?:by|due|before|on)\s+([a-z]{3,9}\s+\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|today|tomorrow)\b/i);
+  if (dateMatch) return dateMatch[1];
+  return fallback || "Next review";
+};
+
+const ownerFromText = (text: string): Task["owner"] => {
+  const lower = text.toLowerCase();
+  if (hasAny(lower, ["can you", "could you", "please send", "please share", "send over", "follow up", "your team", "you mentioned"])) return "Pat";
+  if (hasAny(lower, ["waiting on", "they will", "buyer will", "prospect will", "client will", "customer will"])) return "Prospect";
+  return "Ambiguous";
+};
+
+const actionFromText = (subject: string, preview: string, account: string) => {
+  const text = `${subject} ${preview}`.toLowerCase();
+  if (hasAny(text, ["proposal", "pricing", "quote", "contract"])) return `Review and respond to the ${account} proposal/pricing thread.`;
+  if (hasAny(text, ["availability", "schedule", "reschedule", "calendar"])) return `Send availability or confirm the next meeting step for ${account}.`;
+  if (hasAny(text, ["deadline", "due", "renewal"])) return `Confirm the deadline-driven next step for ${account}.`;
+  if (hasAny(text, ["question", "asked", "can you", "could you"])) return `Answer the open buyer question from ${account}.`;
+  return `Review the Outlook signal and choose the smallest useful next action for ${account}.`;
+};
+
+const messageSuppressionReason = (message: OutlookIndexedMessage) => {
+  const text = `${message.subject} ${message.preview} ${message.sender}`.toLowerCase();
+  if (hasAny(text, ["unsubscribe", "newsletter", "digest", "webinar invitation", "marketing update", "automated notification"])) {
+    return "Newsletter, automated, or broad marketing item.";
+  }
+  if (message.sender.toLowerCase().includes("@d2l.com") && !hasAny(text, ["customer", "prospect", "proposal", "renewal", message.account.toLowerCase()])) {
+    return "Internal-only Outlook item without concrete external prospect work.";
+  }
+  return "";
+};
+
+const eventSuppressionReason = (event: OutlookIndexedEvent) => {
+  const text = `${event.title} ${event.organizer} ${event.attendees.join(" ")}`.toLowerCase();
+  const hasExternal = event.attendees.some((attendee) => attendee && !attendee.toLowerCase().includes("@d2l.com"));
+  if (!hasExternal && !hasAny(text, ["prospect", "customer", event.account.toLowerCase()])) {
+    return "Internal calendar item without external buyer context.";
+  }
+  return "";
+};
+
+const normalizeAttendees = (record: JsonRecord) => {
+  const raw = getPath(record, "attendees");
+  if (!Array.isArray(raw)) return stringifyUnknown(raw) ? [stringifyUnknown(raw)] : [];
+  return raw
+    .map((attendee) =>
+      isRecord(attendee)
+        ? getStringField(attendee, ["emailAddress.name", "emailAddress.address", "name", "address", "email"])
+        : stringifyUnknown(attendee)
+    )
+    .filter(Boolean);
+};
+
+const normalizeMessages = (payload: unknown, accountTerms: string[]): OutlookIndexedMessage[] => {
+  const records = uniqueByFingerprint(
+    collectCandidateRecords(payload, looksLikeMessage),
+    (record) =>
+      [
+        getStringField(record, ["id", "message_id", "internetMessageId"]),
+        getStringField(record, ["subject", "title"]),
+        getStringField(record, ["receivedDateTime", "received_at", "received"])
+      ].join("|")
+  );
+
+  return records.map((record, index) => {
+    const subject = getStringField(record, ["subject", "title"]) || "Untitled email";
+    const preview = getStringField(record, ["bodyPreview", "preview", "snippet", "summary", "body.content", "body"]).slice(0, 420);
+    const sender =
+      getStringField(record, ["from.emailAddress.name", "from.emailAddress.address", "sender.emailAddress.name", "sender.emailAddress.address", "from", "sender"]) ||
+      "Unknown sender";
+    const receivedAt = getStringField(record, ["receivedDateTime", "received_at", "received", "date"]);
+    const id = getStringField(record, ["id", "message_id", "internetMessageId"]) || `message-${index + 1}`;
+    const sourceLink = getStringField(record, ["webLink", "source_link", "link"]);
+    const account = accountFromText(`${subject} ${preview} ${sender}`, accountTerms);
+
+    return {
+      id,
+      subject,
+      sender,
+      receivedAt,
+      preview,
+      account,
+      sourceLink: sourceLink || undefined,
+      signalStrength: priorityFromText(`${subject} ${preview}`)
+    };
+  });
+};
+
+const normalizeEvents = (payload: unknown, accountTerms: string[]): OutlookIndexedEvent[] => {
+  const records = uniqueByFingerprint(
+    collectCandidateRecords(payload, looksLikeEvent),
+    (record) =>
+      [
+        getStringField(record, ["id", "event_id"]),
+        getStringField(record, ["subject", "title", "name", "summary"]),
+        getStringField(record, ["start.dateTime", "start_datetime", "start"])
+      ].join("|")
+  );
+
+  return records.map((record, index) => {
+    const title = getStringField(record, ["subject", "title", "name", "summary"]) || "Untitled event";
+    const start = getStringField(record, ["start.dateTime", "start_datetime", "start"]);
+    const end = getStringField(record, ["end.dateTime", "end_datetime", "end"]);
+    const organizer = getStringField(record, ["organizer.emailAddress.name", "organizer.emailAddress.address", "organizer", "createdBy.user.displayName"]) || "Unknown organizer";
+    const attendees = normalizeAttendees(record);
+    const responseState = getStringField(record, ["responseStatus.response", "showAs", "status"]) || "Unknown";
+    const id = getStringField(record, ["id", "event_id"]) || `event-${index + 1}`;
+    const sourceLink = getStringField(record, ["webLink", "onlineMeeting.joinUrl", "source_link", "link"]);
+    const account = accountFromText(`${title} ${organizer} ${attendees.join(" ")}`, accountTerms);
+
+    return {
+      id,
+      title,
+      start,
+      end,
+      organizer,
+      attendees,
+      account,
+      responseState,
+      sourceLink: sourceLink || undefined,
+      signalStrength: priorityFromText(`${title} ${start}`)
+    };
+  });
+};
+
+const parseConnectorPayload = (connectorJson: string, accountTerms: string[]) => {
+  const warnings: string[] = [];
+  if (!connectorJson.trim()) {
+    return { messages: [] as OutlookIndexedMessage[], events: [] as OutlookIndexedEvent[], warnings };
+  }
+
+  try {
+    const parsed = JSON.parse(connectorJson) as unknown;
+    const messages = normalizeMessages(parsed, accountTerms);
+    const events = normalizeEvents(parsed, accountTerms);
+    if (messages.length === 0 && events.length === 0) {
+      warnings.push("Connector JSON parsed, but no Outlook message or event records were recognized.");
+    }
+    return { messages, events, warnings };
+  } catch {
+    return {
+      messages: [] as OutlookIndexedMessage[],
+      events: [] as OutlookIndexedEvent[],
+      warnings: ["Connector JSON could not be parsed. Paste the raw Outlook connector response or adapter response JSON."]
+    };
+  }
+};
+
+const buildMessageTask = (message: OutlookIndexedMessage, index: number): Task => {
+  const evidence = message.preview || message.subject;
+  return {
+    id: `outlook-email-task-${index + 1}`,
+    source: "email",
+    context: `Email: ${message.subject}`,
+    account: message.account,
+    contact: message.sender,
+    concreteNextAction: actionFromText(message.subject, message.preview, message.account),
+    whyItMatters: evidence || "Outlook connector surfaced this as a recent customer/prospect signal.",
+    due: extractDue(`${message.subject} ${message.preview}`, message.receivedAt || "Next review"),
+    priority: message.signalStrength,
+    group: message.signalStrength === "High" ? "Top Priorities" : "Follow-Ups And Responses",
+    owner: ownerFromText(`${message.subject} ${message.preview}`)
+  };
+};
+
+const buildEventTask = (event: OutlookIndexedEvent, index: number): Task => ({
+  id: `outlook-calendar-task-${index + 1}`,
+  source: "calendar",
+  context: `Calendar: ${event.title}`,
+  account: event.account,
+  contact: event.organizer,
+  concreteNextAction: `Prep for ${event.title} and confirm the useful next step before the meeting.`,
+  whyItMatters: `${event.start || "Scheduled meeting"} with ${event.organizer}; attendee state ${event.responseState}.`,
+  due: event.start || "Before meeting",
+  priority: event.signalStrength === "Low" ? "Medium" : event.signalStrength,
+  group: "Meeting Prep And Time-Bound Tasks",
+  owner: "Pat"
+});
+
+const recommendationFromTask = (task: Task, index: number): Recommendation => ({
+  id: `outlook-rec-${index + 1}`,
+  account: task.account,
+  contact: task.contact,
+  trigger: task.context,
+  context: task.whyItMatters,
+  whyItMatters: task.whyItMatters,
+  recommendedAction: task.concreteNextAction,
+  softCta: task.source === "calendar" ? "What should be true by the end of the meeting?" : "Worth a quick, specific reply?",
+  priority: task.priority,
+  confidence: task.owner === "Ambiguous" ? "Medium" : "High",
+  source: task.source,
+  originatingModule: "Outlook Live Sync"
+});
+
 export const buildOutlookIndexPlan = (input: {
   mode: OutlookIndexMode;
   mailboxLabel: string;
@@ -416,6 +712,8 @@ export const buildOutlookIndexPlan = (input: {
   emailQuery: string;
   calendarFocus: string;
   accountFocus: string;
+  connectorJson?: string;
+  adapterUrl?: string;
 }): OutlookIndexPlan => {
   const queryTerms = normalizeQueryTerms(input.emailQuery);
   const focusTerms = normalizeQueryTerms(input.calendarFocus);
@@ -431,6 +729,48 @@ export const buildOutlookIndexPlan = (input: {
   const startDatetime = `${input.startDate || "YYYY-MM-DD"}T00:00:00-04:00`;
   const endDatetime = `${input.endDate || "YYYY-MM-DD"}T23:59:59-04:00`;
   const calendarQuery = accountTerms[0] ?? "";
+  const parsedConnector = parseConnectorPayload(input.connectorJson ?? "", accountTerms);
+  const suppressedMessages = parsedConnector.messages
+    .map((message) => ({ message, reason: messageSuppressionReason(message) }))
+    .filter((item) => item.reason);
+  const suppressedEvents = parsedConnector.events
+    .map((event) => ({ event, reason: eventSuppressionReason(event) }))
+    .filter((item) => item.reason);
+  const messageIndex = parsedConnector.messages.filter((message) => !messageSuppressionReason(message));
+  const eventIndex = parsedConnector.events.filter((event) => !eventSuppressionReason(event));
+  const taskCandidates = [
+    ...messageIndex
+      .filter((message) => message.signalStrength !== "Low" || ownerFromText(`${message.subject} ${message.preview}`) !== "Ambiguous")
+      .map(buildMessageTask),
+    ...eventIndex.map(buildEventTask)
+  ].sort((a, b) => {
+    const rank = { High: 3, Medium: 2, Low: 1 };
+    return rank[b.priority] - rank[a.priority];
+  });
+  const suppressionLog: OutlookSuppression[] = [
+    ...suppressedMessages.map(({ message, reason }, index) => ({
+      id: `outlook-suppressed-email-${index + 1}`,
+      sourceId: message.id,
+      sourceType: "email" as const,
+      reason,
+      evidence: `${message.subject} - ${message.sender}`
+    })),
+    ...suppressedEvents.map(({ event, reason }, index) => ({
+      id: `outlook-suppressed-event-${index + 1}`,
+      sourceId: event.id,
+      sourceType: "calendar" as const,
+      reason,
+      evidence: `${event.title} - ${event.organizer}`
+    }))
+  ];
+  const connectorState =
+    parsedConnector.warnings.some((warning) => warning.startsWith("Connector JSON could not"))
+      ? "Parse error"
+      : input.connectorJson?.trim()
+        ? "Dynamic evidence loaded"
+        : input.adapterUrl?.trim()
+          ? "Ready for live adapter"
+          : "Needs connector payload";
   const handoff = {
     mode: input.mode,
     modeLabel: modeLabels[input.mode],
@@ -440,8 +780,21 @@ export const buildOutlookIndexPlan = (input: {
     emailQuery: emailSearchQuery,
     calendarWindow: { startDatetime, endDatetime, query: calendarQuery },
     indexOutputs: ["message_index", "event_index", "task_candidates", "suppression_log"],
+    liveAdapter: {
+      adapterUrl: input.adapterUrl || "",
+      emailAction: "search_messages",
+      calendarAction: "list_events"
+    },
+    indexedCounts: {
+      messages: messageIndex.length,
+      events: eventIndex.length,
+      tasks: taskCandidates.length,
+      suppressions: suppressionLog.length
+    },
     writePolicy: "read_only_until_user_confirms"
   };
+  const liveScoreBoost = input.connectorJson?.trim() ? 22 : input.adapterUrl?.trim() ? 12 : 0;
+  const liveIndexScore = clamp(indexScore + liveScoreBoost);
 
   return {
     id: `outlook-index-${Date.now()}`,
@@ -452,35 +805,40 @@ export const buildOutlookIndexPlan = (input: {
     endDate: input.endDate,
     emailQuery: emailSearchQuery,
     calendarFocus: [...focusTerms, ...accountTerms].join(", "),
-    readiness,
-    indexScore,
+    readiness: liveIndexScore >= 75 ? "High" : liveIndexScore >= 48 ? "Medium" : readiness,
+    indexScore: liveIndexScore,
     stats: {
       emailStages: 2,
       calendarStages: 2,
-      writeActions: 0
+      writeActions: 0,
+      indexedMessages: messageIndex.length,
+      indexedEvents: eventIndex.length,
+      taskCandidates: taskCandidates.length,
+      suppressions: suppressionLog.length
     },
+    connectorState,
     stages: [
       {
         id: "email-shortlist",
-        label: "Email shortlist",
+        label: "Live email search",
         connector: "Outlook Email",
-        description: "Search bounded mailbox windows with sales/account keywords before fetching full bodies."
+        description: "Run a bounded Outlook Email search with sales/account keywords and index the returned evidence."
       },
       {
         id: "calendar-context",
-        label: "Calendar context",
+        label: "Live calendar window",
         connector: "Outlook Calendar",
-        description: "List meetings in the same bounded window and flag external attendee or timing risks."
+        description: "List meetings in the same bounded window and flag prep, attendee, and timing risks."
       },
       {
         id: "candidate-fetch",
-        label: "Candidate fetch",
+        label: "Evidence normalization",
         connector: "Outlook Email",
-        description: "Fetch full message bodies only for shortlisted threads where owner, due date, or evidence is unclear."
+        description: "Normalize connector responses into message and event indexes with source IDs preserved."
       },
       {
         id: "seller-index",
-        label: "Seller-ready index",
+        label: "Seller-ready task synthesis",
         connector: "Command Center",
         description: "Merge duplicate asks, separate Pat-owned/prospect-owned/ambiguous work, and preserve suppressions."
       }
@@ -517,7 +875,7 @@ export const buildOutlookIndexPlan = (input: {
       "Suppress newsletters, automated notices, and internal-only FYI messages unless they create concrete external-prospect work.",
       "If calendar returns no external prospect meetings, record that as an empty-context signal instead of inventing tasks.",
       "If timing or attendee status conflicts, mark confirmation risk rather than presenting it as settled work.",
-      "Never send, schedule, move, categorize, or create Outlook items from indexing mode."
+      "Never send, schedule, move, categorize, or create Outlook items from live sync mode."
     ],
     commandPlans: [
       {
@@ -525,6 +883,8 @@ export const buildOutlookIndexPlan = (input: {
         label: "Search Outlook email window",
         connector: "Outlook Email",
         action: "search_messages",
+        method: "connector",
+        endpoint: "mcp://outlook-email/search_messages",
         payload: JSON.stringify({ query: emailSearchQuery || "received>=YYYY-MM-DD received<=YYYY-MM-DD", size: 50 }, null, 2),
         safety: "Read-only",
         whenToUse: "First pass over the mailbox for bounded account, prospect, and follow-up evidence."
@@ -534,6 +894,8 @@ export const buildOutlookIndexPlan = (input: {
         label: "List Outlook calendar window",
         connector: "Outlook Calendar",
         action: "list_events",
+        method: "connector",
+        endpoint: "mcp://outlook-calendar/list_events",
         payload: JSON.stringify({ start_datetime: startDatetime, end_datetime: endDatetime, top: 50 }, null, 2),
         safety: "Read-only",
         whenToUse: "Second pass for meetings, deadlines, attendee state, and prep timing."
@@ -543,6 +905,8 @@ export const buildOutlookIndexPlan = (input: {
         label: "Fetch shortlisted email bodies",
         connector: "Outlook Email",
         action: "fetch_messages_batch",
+        method: "connector",
+        endpoint: "mcp://outlook-email/fetch_messages_batch",
         payload: JSON.stringify({ message_ids: ["<shortlisted-message-id>"], batch_size: 20 }, null, 2),
         safety: "Read-only",
         whenToUse: "Only after shortlist results require body-level evidence for owner or due date."
@@ -552,11 +916,19 @@ export const buildOutlookIndexPlan = (input: {
         label: "Fetch shortlisted event details",
         connector: "Outlook Calendar",
         action: "fetch_events_batch",
+        method: "connector",
+        endpoint: "mcp://outlook-calendar/fetch_events_batch",
         payload: JSON.stringify({ event_ids: ["<shortlisted-event-id>"], batch_size: 20 }, null, 2),
         safety: "Read-only",
         whenToUse: "Only when event body, attendee responses, Teams details, or organizer intent matter."
       }
     ],
+    messageIndex,
+    eventIndex,
+    taskCandidates,
+    liveRecommendations: taskCandidates.map(recommendationFromTask),
+    suppressionLog,
+    parseWarnings: parsedConnector.warnings,
     handoffJson: JSON.stringify(handoff, null, 2)
   };
 };

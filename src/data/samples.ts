@@ -1,8 +1,8 @@
 // Real import samples for testing the Import Processor.
 //
 // These strings seed the Imports view so the two documents Pat uploaded can be
-// analyzed end-to-end. The canonical column order used here is the recommended
-// "cleanest format" for manual uploads (automation/connectors are a v2 concern).
+// analyzed end-to-end. The canonical column order used here keeps manual
+// uploads useful beside connector-backed workflows.
 //
 // Source files (full, unabridged) live in /samples at the repo root:
 //   - samples/pa-associations-prospects.csv     (1,388 scored PA associations)

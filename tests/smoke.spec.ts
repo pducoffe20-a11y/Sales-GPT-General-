@@ -11,16 +11,30 @@ test("dashboard loads and captures desktop screenshot", async ({ page }) => {
   mkdirSync(screenshotDir, { recursive: true });
   await expect(page.getByRole("heading", { name: "Today Command Center" })).toBeVisible();
   await expect(page.getByText("Highest-Priority Next Actions")).toBeVisible();
+  await expect(page.getByTestId("agent-layer-today")).toContainText("Agent work layer");
+  await expect(page.getByTestId("agent-layer-today")).toContainText("Route broad seller questions");
   await expect(page.getByTestId("account-workspace")).toContainText("National Assoc. of Shop Owners");
   await page.screenshot({ path: `${screenshotDir}/desktop-dashboard.png`, fullPage: true });
+});
+
+test("module agent work layers show module-specific reasoning", async ({ page }) => {
+  await expect(page.getByTestId("agent-layer-today")).toContainText("Prioritize the queue");
+
+  await page.getByRole("button", { name: "Imports" }).click();
+  await expect(page.getByTestId("agent-layer-imports")).toContainText("Profile the import");
+  await expect(page.getByTestId("agent-layer-imports")).toContainText("Suppress weak records");
+
+  await page.getByRole("button", { name: "Outlook" }).click();
+  await expect(page.getByTestId("agent-layer-outlook")).toContainText("Normalize connector payloads");
+  await expect(page.getByTestId("agent-layer-outlook")).toContainText("No Outlook writes");
 });
 
 test("navigation works and account detail pages render", async ({ page }) => {
   await page.getByRole("button", { name: "Accounts" }).click();
   await expect(page.getByRole("heading", { name: "Account Action Board" })).toBeVisible();
-  await page.getByRole("button", { name: /Healthcare Educators Association/i }).click();
+  await page.getByTestId("account-workspace").getByRole("button", { name: /Healthcare Educators/i }).click();
   await expect(page.getByTestId("account-workspace")).toContainText("Healthcare Educators Association");
-  await expect(page.getByText("Research Gaps")).toBeVisible();
+  await expect(page.getByTestId("account-workspace").getByText("Research Gaps")).toBeVisible();
 });
 
 test("global search jumps to matching account context", async ({ page }) => {
@@ -68,6 +82,25 @@ Healthcare Credentialing Association,Renee Martin,Director of Education,Credenti
   await expect(page.getByTestId("import-results")).toContainText("Review Now");
 });
 
+test("pipeline visual scan filters and selects deal focus", async ({ page }) => {
+  await page.getByRole("button", { name: "Pipeline" }).click();
+  await expect(page.getByTestId("pipeline-visual-scan")).toContainText("Forecast amount");
+  await expect(page.getByTestId("pipeline-deal-focus")).toContainText("AmericanHort");
+
+  await page.getByRole("button", { name: "Best Case forecast" }).click();
+  await expect(page.getByTestId("pipeline-table")).toContainText("Justice & Upward Mobility Project");
+  await expect(page.getByTestId("pipeline-table")).not.toContainText("AmericanHort");
+
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page
+    .getByTestId("pipeline-table")
+    .getByRole("button", { name: /Massachusetts Society of Certified Public Accountants/i })
+    .click();
+  await expect(page.getByTestId("pipeline-deal-focus")).toContainText("Massachusetts Society");
+  await expect(page.getByTestId("pipeline-deal-focus")).toContainText("Could slip");
+  await page.screenshot({ path: `${screenshotDir}/pipeline-visual-scan.png`, fullPage: true });
+});
+
 test("linkedin research layer builds a command handoff", async ({ page }) => {
   await page.getByRole("button", { name: "LinkedIn" }).click();
   await expect(page.getByRole("heading", { name: "LinkedIn Research Layer" })).toBeVisible();
@@ -88,18 +121,21 @@ test("linkedin research layer builds a command handoff", async ({ page }) => {
   await page.screenshot({ path: `${screenshotDir}/linkedin-research.png`, fullPage: true });
 });
 
-test("outlook indexing layer builds read-only connector plan", async ({ page }) => {
+test("outlook live workbench builds a dynamic connector task index", async ({ page }) => {
   await page.getByRole("button", { name: "Outlook" }).click();
-  await expect(page.getByRole("heading", { name: "Outlook Indexing Layer" })).toBeVisible();
-  await page.getByLabel("Outlook indexing mode").selectOption("weekly_pipeline_prep");
+  await expect(page.getByRole("heading", { name: "Outlook Live Workbench" })).toBeVisible();
+  await page.getByLabel("Outlook sync mode").selectOption("weekly_pipeline_prep");
   await page.getByLabel("Outlook account focus").fill("JUMP, TruMerit, Pacific Medical Training");
-  await page.getByRole("button", { name: "Build Index Plan" }).click();
-  await expect(page.getByTestId("outlook-index-plan")).toContainText("Email shortlist");
-  await expect(page.getByText("Connector Action Plan")).toBeVisible();
-  await expect(page.getByText("search_messages")).toBeVisible();
-  await expect(page.getByText("list_events")).toBeVisible();
+  await page.getByRole("button", { name: "Load Test Payload" }).click();
+  await expect(page.getByTestId("outlook-live-index")).toContainText("Dynamic evidence loaded");
+  await expect(page.getByTestId("outlook-live-tasks")).toContainText("Review and respond");
+  await expect(page.getByTestId("outlook-evidence")).toContainText("JUMP proposal follow-up");
+  await expect(page.getByText("Connector Requests")).toBeVisible();
+  await expect(page.locator("code", { hasText: "search_messages" }).first()).toBeVisible();
+  await expect(page.locator("code", { hasText: "list_events" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Suppression Log" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Export JSON" })).toBeVisible();
-  await page.screenshot({ path: `${screenshotDir}/outlook-indexing.png`, fullPage: true });
+  await page.screenshot({ path: `${screenshotDir}/outlook-live-workbench.png`, fullPage: true });
 });
 
 test("pasted notes import creates an evidence record and handoff", async ({ page }) => {

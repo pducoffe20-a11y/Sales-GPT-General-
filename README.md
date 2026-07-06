@@ -1,9 +1,17 @@
 # Sales-GPT-General-
 
-D2L Sales Command Center — a daily, import-first sales operating system for Pat.
+D2L Sales Command Center — a daily, connected sales operating system for Pat.
 See `AGENTS.md` for build rules.
 
-## Import samples & the cleanest manual-upload format
+## Live Outlook and import samples
+
+The **Outlook** view is a live workbench for read-side Outlook Email and
+Calendar integrations. It prepares bounded connector requests, can call an
+injected browser adapter (`window.outlookConnector.sync`) or a local adapter at
+`/outlook/sync`, and can also ingest raw connector JSON pasted from Codex. The
+dynamic index turns returned messages/events into task candidates, indexed
+evidence, and suppression logs. It does not send, move, schedule, tag, or write
+Outlook records.
 
 Real data used to test the Import Processor lives in [`samples/`](samples/):
 
@@ -15,17 +23,17 @@ Real data used to test the Import Processor lives in [`samples/`](samples/):
 | `manual-upload-template-prospects.csv` | 1 | Blank prospect-research template |
 | `manual-upload-template-pipeline.csv` | 1 | Blank pipeline-review template |
 
-In the **Imports** view, the two data files can be loaded with one click via
+In the **Imports** view, the data files can be loaded with one click via
 **Load a real sample**, and the **Cleanest Upload Format** panel shows the
 recommended columns for the selected purpose. The Pipeline view is seeded from
 the 14 opportunities above (`src/data/mockData.ts`).
 
-### Cleanest format for manual uploads (v1)
+### Cleanest format for manual uploads
 
-Automated connectors (Salesforce, LinkedIn, Outlook, …) are a v2 concern. For
-now, a manual upload is a plain CSV whose header row matches these canonical
-columns. Extra columns are ignored; missing optional columns just lower the
-confidence score. Put the trigger/evidence in `notes` — it drives scoring.
+Manual upload remains useful when a CSV is faster than a connector pull. A
+manual upload is a plain CSV whose header row matches these canonical columns.
+Extra columns are ignored; missing optional columns lower the confidence score.
+Put the trigger/evidence in `notes` because it drives scoring.
 
 **Prospect / account research** (`*` = required)
 

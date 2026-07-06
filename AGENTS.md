@@ -7,7 +7,7 @@ This app is a daily D2L Brightspace sales operating system for Pat, not a generi
 ## Plugin Boundaries
 
 - Use the outside D2L Codex plugins and Sales plugin as operating logic and vocabulary.
-- Keep v1 frontend-only and import-first. Do not claim live Outlook, Slack, SharePoint, Zoom, or CRM execution unless a connector-backed adapter is actually implemented.
+- Keep the app client-first, with live integrations routed through connector-backed read adapters or pasted connector payloads. Do not claim Outlook, Slack, SharePoint, Zoom, or CRM write execution unless a connector-backed adapter is actually implemented.
 - Every recommendation must keep `whyItMatters`, `recommendedAction`, `softCta`, `confidence`, `source`, and `originatingModule`.
 - Drafts are review artifacts only. Do not add send/post/write behavior without explicit user approval and a real connector implementation.
 

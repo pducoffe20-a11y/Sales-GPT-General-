@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   ArrowUpRight,
+  BarChart3,
   Building2,
   CalendarClock,
   Download,
+  Filter,
   GitBranch,
   Inbox,
   LayoutDashboard,
@@ -13,6 +15,8 @@ import {
   MessageSquareText,
   Moon,
   PenLine,
+  PlugZap,
+  RefreshCw,
   Search,
   Sun,
   TriangleAlert,
@@ -27,7 +31,7 @@ import {
   todayRecommendations,
   triggers
 } from "./data/mockData";
-import { integrationSources } from "./data/pluginRegistry";
+import { integrationSources, pluginModules } from "./data/pluginRegistry";
 import {
   analyzePipeline,
   buildFollowUpDraft,
@@ -53,12 +57,21 @@ import type {
   LinkedInResearchIntent,
   OutlookIndexMode,
   OutlookIndexPlan,
+  PipelineOpportunity,
   Priority,
   ProspectRecord,
   ProspectStatus,
   ProspectUpload,
   SourceCategory
 } from "./types";
+
+declare global {
+  interface Window {
+    outlookConnector?: {
+      sync: (request: unknown) => Promise<unknown>;
+    };
+  }
+}
 
 /* ------------------------------------------------------------------ utils */
 
@@ -73,10 +86,23 @@ type ViewId =
   | "linkedin"
   | "outlook";
 
+type PipelineRow = ReturnType<typeof analyzePipeline>[number];
+type ForecastFilter = PipelineOpportunity["forecast"] | "All";
+type RiskFilter = Priority | "All";
+
+const forecastOrder: PipelineOpportunity["forecast"][] = [
+  "Commit",
+  "Best Case",
+  "Pipeline",
+  "At Risk"
+];
+const riskOrder: Priority[] = ["High", "Medium", "Low"];
+
 const fmtMoney = (n: number) =>
   n >= 1000 ? `$${Math.round(n / 1000)}K` : `$${n.toLocaleString()}`;
 
 const heatClass = (v: number) => (v >= 75 ? "hot" : v >= 48 ? "warm" : "cool");
+const clampViz = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 
 const priorityPill = (p: Priority) =>
   p === "High" ? "danger" : p === "Medium" ? "warn" : "plain";
@@ -94,6 +120,43 @@ const initials = (name: string) =>
 
 const cssVar = (name: string, value: number): CSSProperties =>
   ({ [name]: value } as CSSProperties);
+
+const appToday = new Date("2026-07-05T00:00:00-04:00");
+
+const parseCloseDate = (value: string) => {
+  const parsed = new Date(`${value} 00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const daysUntil = (value: string) => {
+  const parsed = parseCloseDate(value);
+  if (!parsed) return null;
+  return Math.ceil((parsed.getTime() - appToday.getTime()) / 86_400_000);
+};
+
+const shortName = (value: string) =>
+  value
+    .replace(/^The\s+/i, "")
+    .split(/\s+/)
+    .filter((word) => !["of", "and", "&"].includes(word.toLowerCase()))
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+
+const sourceCategoryShortLabels: Record<SourceCategory, string> = {
+  csv_upload: "CSV",
+  pasted_notes: "Notes",
+  crm_export: "CRM",
+  calendar: "Calendar",
+  email: "Email",
+  linkedin: "LinkedIn",
+  sales_navigator: "Sales Nav",
+  slack: "Slack",
+  sharepoint: "SharePoint",
+  zoom: "Zoom",
+  manual: "Manual"
+};
 
 /* ------------------------------------------------------------ small parts */
 
@@ -161,6 +224,428 @@ function ViewHead({
       <h1>{title}</h1>
       <p>{sub}</p>
     </header>
+  );
+}
+
+function ModuleAgentLayer({
+  moduleIds,
+  testid
+}: {
+  moduleIds: string[];
+  testid: string;
+}) {
+  const modules = moduleIds
+    .map((id) => pluginModules.find((module) => module.id === id))
+    .filter((module): module is (typeof pluginModules)[number] => Boolean(module));
+
+  if (modules.length === 0) return null;
+
+  const workItems = modules.flatMap((module) =>
+    module.agentWork.map((work) => ({ module, work }))
+  );
+
+  return (
+    <section className="agent-layer" data-testid={`agent-layer-${testid}`}>
+      <div className="agent-layer-head">
+        <span className="pill accent">Agent work layer</span>
+        <div>
+          <h2>{modules.length === 1 ? modules[0].displayName : "Command work orchestration"}</h2>
+          <p>{modules.map((module) => module.purpose).join(" ")}</p>
+        </div>
+      </div>
+      <div className="agent-layer-grid">
+        {workItems.map(({ module, work }) => (
+          <article className="agent-step" key={`${module.id}-${work.id}`}>
+            <div className="agent-step-top">
+              <span className="agent-module">{module.appSection}</span>
+              <span className="pill plain">{work.confidenceRule.includes("High") ? "Confidence gated" : "Evidence gated"}</span>
+            </div>
+            <h3>{work.label}</h3>
+            <div className="agent-sources">
+              {work.evidenceInputs.map((source) => (
+                <span key={source}>{sourceCategoryShortLabels[source]}</span>
+              ))}
+            </div>
+            <div className="agent-line">
+              <b>Reason</b>
+              <span>{work.reasoning}</span>
+            </div>
+            <div className="agent-line">
+              <b>Output</b>
+              <span>{work.output}</span>
+            </div>
+            <div className="agent-line">
+              <b>Handoff</b>
+              <span>{work.handoff}</span>
+            </div>
+            <div className="agent-guardrail">{work.guardrail}</div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------- visualization */
+
+function FilterChip<T extends string>({
+  label,
+  active,
+  onClick,
+  icon
+}: {
+  label: T | string;
+  active: boolean;
+  onClick: () => void;
+  icon?: ReactNode;
+}) {
+  return (
+    <button className={`viz-chip${active ? " active" : ""}`} onClick={onClick}>
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function AccountMomentumMap({
+  selectedId,
+  onSelect
+}: {
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  const active = accounts.find((a) => a.id === selectedId) ?? accounts[0];
+  const maxAmount = Math.max(...accounts.map((a) => a.amount ?? 0), 1);
+  const ranked = [...accounts].sort(
+    (a, b) =>
+      b.fitScore + b.timingScore + (b.health === "Good" ? 8 : 0) -
+      (a.fitScore + a.timingScore + (a.health === "Good" ? 8 : 0))
+  );
+
+  const selectFromKey = (event: KeyboardEvent<SVGGElement>, id: string) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(id);
+    }
+  };
+
+  return (
+    <div className="momentum-map" data-testid="account-momentum-map">
+      <div className="viz-note">
+        <span className="pill accent">Fit x timing</span>
+        <span>Bubble size shows open value; color shows account health.</span>
+      </div>
+
+      <div className="momentum-layout">
+        <div className="plot-card">
+          <svg viewBox="0 0 520 320" role="img" aria-labelledby="momentum-title momentum-desc">
+            <title id="momentum-title">Account fit and timing momentum map</title>
+            <desc id="momentum-desc">
+              Accounts plotted by Brightspace fit score and timing score. Larger bubbles have more open pipeline value.
+            </desc>
+            <rect className="zone zone-priority" x="274" y="36" width="206" height="118" rx="8" />
+            <rect className="zone zone-watch" x="274" y="154" width="206" height="116" rx="8" />
+            <line className="axis" x1="42" y1="270" x2="488" y2="270" />
+            <line className="axis" x1="42" y1="270" x2="42" y2="30" />
+            {[25, 50, 75].map((tick) => (
+              <g key={tick}>
+                <line className="gridline" x1={42 + tick * 4.46} y1="30" x2={42 + tick * 4.46} y2="270" />
+                <line className="gridline" x1="42" y1={270 - tick * 2.4} x2="488" y2={270 - tick * 2.4} />
+              </g>
+            ))}
+            <text className="axis-label" x="488" y="298" textAnchor="end">Fit</text>
+            <text className="axis-label" x="12" y="38" transform="rotate(-90 12 38)">Timing</text>
+            <text className="zone-label" x="286" y="55">Work now</text>
+            <text className="zone-label" x="286" y="173">Nurture with proof</text>
+            {accounts.map((account) => {
+              const x = 42 + clampViz(account.fitScore) * 4.46;
+              const y = 270 - clampViz(account.timingScore) * 2.4;
+              const radius = 11 + ((account.amount ?? 0) / maxAmount) * 14;
+              const activePoint = account.id === active.id;
+              return (
+                <g
+                  key={account.id}
+                  className={`bubble-hit ${activePoint ? "active" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${account.name} account marker`}
+                  onClick={() => onSelect(account.id)}
+                  onKeyDown={(event) => selectFromKey(event, account.id)}
+                >
+                  <circle
+                    className={`bubble ${account.health.toLowerCase()}`}
+                    cx={x}
+                    cy={y}
+                    r={radius}
+                  />
+                  <text className="bubble-label" x={x} y={y + 4} textAnchor="middle">
+                    {shortName(account.name)}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        <div className="viz-focus">
+          <div className="eyebrow">Selected account</div>
+          <h3>{active.name}</h3>
+          <div className="row wrap">
+            <span className={`pill ${healthPill(active.health)}`}>{active.health}</span>
+            <span className="pill plain">{active.stage}</span>
+            <span className="pill plain">{active.amount ? fmtMoney(active.amount) : "No value"}</span>
+          </div>
+          <div className="spark-pair">
+            <ScoreRow label="Fit" value={active.fitScore} />
+            <ScoreRow label="Timing" value={active.timingScore} />
+          </div>
+          <div className="callout teal">{active.nextBestMove}</div>
+        </div>
+      </div>
+
+      <div className="momentum-rank">
+        {ranked.map((account, index) => (
+          <button
+            key={account.id}
+            className={`rank-card${account.id === active.id ? " active" : ""}`}
+            onClick={() => onSelect(account.id)}
+          >
+            <span className="rank-num">{String(index + 1).padStart(2, "0")}</span>
+            <span className="rank-body">
+              <b>{account.name}</b>
+              <span>{account.nextTouchDue} · {account.relationshipStatus}</span>
+            </span>
+            <span className={`pill ${healthPill(account.health)}`}>{account.health}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DealRiskMatrix({
+  rows,
+  selectedId,
+  onSelect
+}: {
+  rows: PipelineRow[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
+  const bucketTotals = rows.reduce<Record<string, number>>((totals, row) => {
+    const key = `${row.probability}-${row.riskScore}`;
+    totals[key] = (totals[key] ?? 0) + 1;
+    return totals;
+  }, {});
+  const bucketSeen: Record<string, number> = {};
+  const selectFromKey = (event: KeyboardEvent<SVGGElement>, id: string) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(id);
+    }
+  };
+
+  return (
+    <div className="plot-card deal-matrix">
+      <svg viewBox="0 0 620 330" role="img" aria-labelledby="deal-matrix-title deal-matrix-desc">
+        <title id="deal-matrix-title">Deal probability and risk matrix</title>
+        <desc id="deal-matrix-desc">
+          Opportunities plotted by win probability and risk score. Larger bubbles represent larger forecast amount.
+        </desc>
+        <rect className="risk-band high" x="44" y="34" width="532" height="90" rx="8" />
+        <rect className="risk-band medium" x="44" y="124" width="532" height="88" rx="8" />
+        <line className="axis" x1="48" y1="272" x2="582" y2="272" />
+        <line className="axis" x1="48" y1="272" x2="48" y2="32" />
+        {[25, 50, 75].map((tick) => (
+          <g key={tick}>
+            <line className="gridline" x1={48 + tick * 5.34} y1="32" x2={48 + tick * 5.34} y2="272" />
+            <line className="gridline" x1="48" y1={272 - tick * 2.4} x2="582" y2={272 - tick * 2.4} />
+          </g>
+        ))}
+        <text className="axis-label" x="582" y="303" textAnchor="end">Win probability</text>
+        <text className="axis-label" x="12" y="42" transform="rotate(-90 12 42)">Slip risk</text>
+        <text className="zone-label" x="62" y="55">Could slip</text>
+        <text className="zone-label" x="62" y="145">Watch</text>
+        {rows.map((row) => {
+          const bucketKey = `${row.probability}-${row.riskScore}`;
+          const bucketIndex = bucketSeen[bucketKey] ?? 0;
+          bucketSeen[bucketKey] = bucketIndex + 1;
+          const bucketCount = bucketTotals[bucketKey] ?? 1;
+          const angle = (bucketIndex / bucketCount) * Math.PI * 2;
+          const offset = bucketCount > 1 ? 11 + Math.floor(bucketIndex / 6) * 5 : 0;
+          const x = clampViz(48 + clampViz(row.probability) * 5.34 + Math.cos(angle) * offset, 60, 570);
+          const y = clampViz(272 - clampViz(row.riskScore) * 2.4 + Math.sin(angle) * offset, 48, 260);
+          const radius = 8 + (row.amount / maxAmount) * 10;
+          const activePoint = row.id === selectedId;
+          return (
+            <g
+              key={row.id}
+              className={`bubble-hit ${activePoint ? "active" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`${row.account} deal marker`}
+              onClick={() => onSelect(row.id)}
+              onKeyDown={(event) => selectFromKey(event, row.id)}
+            >
+              <circle className={`deal-dot risk-${row.risk.toLowerCase()}`} cx={x} cy={y} r={radius} />
+              <text className="bubble-label" x={x} y={y + 4} textAnchor="middle">
+                {shortName(row.account)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function PipelineVisualLayer({
+  rows,
+  visibleRows,
+  selectedId,
+  forecastFilter,
+  riskFilter,
+  onSelect,
+  onForecastFilter,
+  onRiskFilter,
+  onClearFilters
+}: {
+  rows: PipelineRow[];
+  visibleRows: PipelineRow[];
+  selectedId: string;
+  forecastFilter: ForecastFilter;
+  riskFilter: RiskFilter;
+  onSelect: (id: string) => void;
+  onForecastFilter: (filter: ForecastFilter) => void;
+  onRiskFilter: (filter: RiskFilter) => void;
+  onClearFilters: () => void;
+}) {
+  const forecastSummary = forecastOrder.map((forecast) => {
+    const forecastRows = rows.filter((row) => row.forecast === forecast);
+    return {
+      forecast,
+      count: forecastRows.length,
+      amount: forecastRows.reduce((sum, row) => sum + row.amount, 0)
+    };
+  });
+  const maxForecast = Math.max(...forecastSummary.map((item) => item.amount), 1);
+  const weightedVisible = visibleRows.reduce((sum, row) => sum + row.amount * (row.probability / 100), 0);
+
+  return (
+    <div className="pipeline-visuals" data-testid="pipeline-visual-scan">
+      <div className="viz-controls" aria-label="Pipeline filters">
+        <div className="control-cluster">
+          <span className="control-label"><Filter size={13} /> Forecast</span>
+          {(["All", ...forecastOrder] as ForecastFilter[]).map((forecast) => (
+            <FilterChip
+              key={forecast}
+              label={forecast}
+              active={forecastFilter === forecast}
+              onClick={() => onForecastFilter(forecast)}
+            />
+          ))}
+        </div>
+        <div className="control-cluster">
+          <span className="control-label">Risk</span>
+          {(["All", ...riskOrder] as RiskFilter[]).map((risk) => (
+            <FilterChip
+              key={risk}
+              label={risk === "All" ? "All" : `${risk} risk`}
+              active={riskFilter === risk}
+              onClick={() => onRiskFilter(risk)}
+            />
+          ))}
+        </div>
+        {(forecastFilter !== "All" || riskFilter !== "All") && (
+          <button className="btn btn-ghost compact" onClick={onClearFilters}>
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className="viz-note">
+        <span className="pill info">{visibleRows.length} visible</span>
+        <span>Weighted visible pipeline · <b className="num">{fmtMoney(weightedVisible)}</b></span>
+      </div>
+
+      <div className="viz-grid">
+        <DealRiskMatrix rows={visibleRows} selectedId={selectedId} onSelect={onSelect} />
+        <div className="forecast-bars">
+          <div className="subhead" style={{ marginTop: 0 }}>Forecast amount</div>
+          {forecastSummary.map((item) => (
+            <button
+              key={item.forecast}
+              className={`bar-button${forecastFilter === item.forecast ? " active" : ""}`}
+              onClick={() => onForecastFilter(item.forecast)}
+              aria-label={`${item.forecast} forecast`}
+            >
+              <span className="bar-meta">
+                <b>{item.forecast}</b>
+                <span>{item.count} deals · {fmtMoney(item.amount)}</span>
+              </span>
+              <span className="bar-track">
+                <span style={{ width: `${(item.amount / maxForecast) * 100}%` }} />
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PipelineDealFocus({ deal }: { deal: PipelineRow | undefined }) {
+  if (!deal) {
+    return (
+      <div className="empty-state" data-testid="pipeline-deal-focus">
+        <div className="big">No matching deal</div>
+        Clear a filter to bring opportunities back into view.
+      </div>
+    );
+  }
+
+  const days = daysUntil(deal.closeDate);
+  const weighted = deal.amount * (deal.probability / 100);
+
+  return (
+    <div className="deal-focus" data-testid="pipeline-deal-focus">
+      <div className="deal-focus-head">
+        <div>
+          <h3>{deal.account}</h3>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {deal.stage} · closes {deal.closeDate}
+          </div>
+        </div>
+        <span
+          className={`pill ${
+            deal.posture === "On track" ? "ok" : deal.posture === "Watch closely" ? "warn" : "danger"
+          }`}
+        >
+          {deal.posture}
+        </span>
+      </div>
+      <div className="deal-kpis">
+        <div>
+          <span>Amount</span>
+          <b>{fmtMoney(deal.amount)}</b>
+        </div>
+        <div>
+          <span>Weighted</span>
+          <b>{fmtMoney(weighted)}</b>
+        </div>
+        <div>
+          <span>Days</span>
+          <b>{days == null ? "TBD" : days}</b>
+        </div>
+      </div>
+      <ScoreRow label="Win probability" value={deal.probability} />
+      <ScoreRow label="Slip risk" value={deal.riskScore} />
+      <div className="subhead">Next move</div>
+      <div className="callout teal">{deal.nextMove}</div>
+      <div className="subhead">Why it matters</div>
+      <p className="kv">{deal.whyItMatters}</p>
+    </div>
   );
 }
 
@@ -305,6 +790,7 @@ function TodayView({
         title="Today Command Center"
         sub="One ranked place to decide the next move, prep the calls that matter, and keep every deal in motion — review-safe, evidence-first."
       />
+      <ModuleAgentLayer moduleIds={["sales-router", "account-signals"]} testid="today" />
 
       <div className="stats">
         <div className="stat">
@@ -325,6 +811,14 @@ function TodayView({
           {overdue > 0 && <div className="d pill danger">Needs a move</div>}
         </div>
       </div>
+
+      <Panel
+        eyebrow="Visual scan"
+        title="Account Momentum Map"
+        right={<span className="pill plain"><BarChart3 size={12} /> Interactive</span>}
+      >
+        <AccountMomentumMap selectedId={focus.id} onSelect={onSelect} />
+      </Panel>
 
       <div className="grid grid-2">
         <Panel eyebrow="Ranked queue" title="Highest-Priority Next Actions" tight>
@@ -429,7 +923,7 @@ function TodayView({
               ))}
           </Panel>
 
-          <Panel eyebrow="Import-first" title="Data Sources" tight>
+          <Panel eyebrow="Connected inputs" title="Data Sources" tight>
             {integrationSources.map((s) => (
               <div className="listrow" key={s.id}>
                 <div className="body">
@@ -437,9 +931,9 @@ function TodayView({
                   <p>{s.whatItUnlocks}</p>
                 </div>
                 <span
-                  className={`pill ${s.status === "Available now" ? "ok" : "plain"}`}
+                  className={`pill ${s.status === "Live connector" || s.status === "Available now" ? "ok" : "plain"}`}
                 >
-                  {s.status === "Available now" ? "Live" : "Planned"}
+                  {s.status === "Live connector" ? "Live" : s.status === "Available now" ? "Ready" : "Planned"}
                 </span>
               </div>
             ))}
@@ -466,7 +960,11 @@ function AccountsView({
         title="Account Action Board"
         sub="Every account stays scan-friendly without hiding weak evidence. Pick a name to open fit, timing, committee, and the open questions to close before outreach."
       />
+      <ModuleAgentLayer moduleIds={["prospect-dashboards"]} testid="accounts" />
       <Panel tight>
+        <div className="account-visual-band">
+          <AccountMomentumMap selectedId={selectedId} onSelect={onSelect} />
+        </div>
         <AccountWorkspace selectedId={selectedId} onSelect={onSelect} />
       </Panel>
     </div>
@@ -476,7 +974,27 @@ function AccountsView({
 /* ------------------------------------------------------------ pipeline view */
 
 function PipelineView() {
-  const rows = analyzePipeline(pipeline);
+  const rows = useMemo(() => analyzePipeline(pipeline), []);
+  const [forecastFilter, setForecastFilter] = useState<ForecastFilter>("All");
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
+  const [selectedDealId, setSelectedDealId] = useState(rows[0]?.id ?? "");
+  const visibleRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          (forecastFilter === "All" || row.forecast === forecastFilter) &&
+          (riskFilter === "All" || row.risk === riskFilter)
+      ),
+    [forecastFilter, riskFilter, rows]
+  );
+  const activeDeal =
+    visibleRows.find((row) => row.id === selectedDealId) ?? visibleRows[0];
+  const selectedVisibleId = activeDeal?.id ?? "";
+  const clearFilters = () => {
+    setForecastFilter("All");
+    setRiskFilter("All");
+  };
+
   return (
     <div className="view">
       <ViewHead
@@ -484,9 +1002,31 @@ function PipelineView() {
         title="Pipeline Risk Review"
         sub="Forecast posture with the reason attached. Risk score blends probability, health, and next-step language so slippage shows up before the forecast call."
       />
-      <Panel tight>
+      <ModuleAgentLayer moduleIds={["meeting-deal-ops"]} testid="pipeline" />
+
+      <div className="grid grid-2 pipeline-layout">
+        <Panel eyebrow="Forecast lens" title="Pipeline Visual Scan">
+          <PipelineVisualLayer
+            rows={rows}
+            visibleRows={visibleRows}
+            selectedId={selectedVisibleId}
+            forecastFilter={forecastFilter}
+            riskFilter={riskFilter}
+            onSelect={setSelectedDealId}
+            onForecastFilter={setForecastFilter}
+            onRiskFilter={setRiskFilter}
+            onClearFilters={clearFilters}
+          />
+        </Panel>
+
+        <Panel eyebrow="Deal focus" title="Selected Opportunity">
+          <PipelineDealFocus deal={activeDeal} />
+        </Panel>
+      </div>
+
+      <Panel eyebrow="Evidence rows" title="Pipeline Table" tight>
         <div style={{ overflowX: "auto" }}>
-          <table className="table">
+          <table className="table" data-testid="pipeline-table">
             <thead>
               <tr>
                 <th>Account</th>
@@ -499,10 +1039,16 @@ function PipelineView() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((o) => (
-                <tr key={o.id}>
+              {visibleRows.map((o) => (
+                <tr key={o.id} className={o.id === selectedVisibleId ? "active-row" : ""}>
                   <td>
-                    <div className="acc">{o.account}</div>
+                    <button
+                      className="table-link"
+                      aria-pressed={o.id === selectedVisibleId}
+                      onClick={() => setSelectedDealId(o.id)}
+                    >
+                      {o.account}
+                    </button>
                     <div className="why">{o.whyItMatters}</div>
                   </td>
                   <td>{o.stage}</td>
@@ -525,6 +1071,12 @@ function PipelineView() {
               ))}
             </tbody>
           </table>
+          {visibleRows.length === 0 && (
+            <div className="empty-state">
+              <div className="big">No deals match</div>
+              Clear a forecast or risk filter to bring records back.
+            </div>
+          )}
         </div>
       </Panel>
     </div>
@@ -554,6 +1106,7 @@ function MeetingPrepView() {
         title="Meeting Prep"
         sub="Turn what you know into a pre-call brief: snapshot, angle, the questions to ask, likely objections, and a review-safe follow-up you can send after."
       />
+      <ModuleAgentLayer moduleIds={["meeting-deal-ops"]} testid="meeting" />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Call details">
           <div className="form-grid">
@@ -663,6 +1216,7 @@ function FollowUpView() {
         title="Follow-Up Builder"
         sub="Short, human, review-safe. Draft the email, the CRM note, and the next task in one pass — then check it against Pat's voice before anything leaves the desk."
       />
+      <ModuleAgentLayer moduleIds={["outreach-messaging"]} testid="followup" />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Call recap">
           <div className="form-grid">
@@ -748,6 +1302,7 @@ function PatVoiceView() {
         title="Pat Voice Checker"
         sub="Catch the corporate tells before Pat copies anything out. Banned phrases get flagged, buyer-relevance is checked, and you get a cleaner rewrite."
       />
+      <ModuleAgentLayer moduleIds={["outreach-messaging"]} testid="voice" />
       <div className="tool-grid">
         <Panel eyebrow="Draft" title="Paste a message">
           <label className="field">
@@ -800,8 +1355,8 @@ const sourceTypeLabels: Record<SourceCategory, string> = {
   csv_upload: "CSV upload",
   pasted_notes: "Pasted notes",
   crm_export: "CRM export",
-  calendar: "Calendar export",
-  email: "Email export",
+  calendar: "Outlook Calendar",
+  email: "Outlook Email",
   linkedin: "LinkedIn export",
   sales_navigator: "Sales Navigator",
   slack: "Slack export",
@@ -840,8 +1395,8 @@ function UploadFormatReference({ purpose }: { purpose: ImportPurpose }) {
   return (
     <div>
       <div className="callout info" style={{ marginBottom: 12 }}>
-        Cleanest manual-upload format for <b>{importPurposeLabels[purpose]}</b>. Automated
-        connectors are v2 — for now, match these headers in a CSV.
+        Cleanest manual-upload format for <b>{importPurposeLabels[purpose]}</b>. Use these
+        headers when a CSV is faster than a live connector pull.
       </div>
       <div className="subhead" style={{ marginTop: 0 }}>Columns (in order)</div>
       <div className="chips">
@@ -966,6 +1521,7 @@ function ImportsView() {
         title="Import Processor"
         sub="Load a real sample — the PA association prospect scan, the open Salesforce opportunities, or Pat’s territory target accounts — or paste your own CSV, CRM export, or meeting note. It profiles the columns live, then scores every row into Work Now, Light Research, and Suppress with the evidence kept visible."
       />
+      <ModuleAgentLayer moduleIds={["prospect-strategy"]} testid="imports" />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Import setup">
           <div className="form-grid">
@@ -1198,6 +1754,7 @@ function LinkedInView() {
         title="LinkedIn Research Layer"
         sub="Turn profile, company, and Sales Navigator evidence into safe account research and a growth-list handoff — no messages, invites, or posts are ever sent from here."
       />
+      <ModuleAgentLayer moduleIds={["linkedin-research"]} testid="linkedin" />
       <div className="tool-grid">
         <Panel eyebrow="Inputs" title="Research target">
           <div className="form-grid">
@@ -1371,6 +1928,45 @@ const outlookModeLabels: Record<OutlookIndexMode, string> = {
   account_research: "Account research"
 };
 
+const outlookConnectorExample = JSON.stringify(
+  {
+    messages: [
+      {
+        id: "msg-jump-proposal",
+        subject: "JUMP proposal follow-up and pilot scope",
+        from: { emailAddress: { name: "Cory Reed", address: "cory@jump.example.org" } },
+        receivedDateTime: "2026-07-06T13:35:00-04:00",
+        bodyPreview:
+          "Can you send the updated proposal and a smaller pilot scope before Friday? We want to review with the executive director.",
+        webLink: "https://outlook.office.com/mail/example"
+      },
+      {
+        id: "msg-newsletter",
+        subject: "Weekly nonprofit technology newsletter",
+        from: { emailAddress: { name: "Events Desk", address: "news@example.org" } },
+        receivedDateTime: "2026-07-06T08:10:00-04:00",
+        bodyPreview: "You are receiving this newsletter because you subscribed to event updates. Unsubscribe here."
+      }
+    ],
+    events: [
+      {
+        id: "evt-trumerit-review",
+        subject: "TruMerit executive review",
+        start: { dateTime: "2026-07-07T14:00:00-04:00" },
+        end: { dateTime: "2026-07-07T14:45:00-04:00" },
+        organizer: { emailAddress: { name: "Leena Patel", address: "leena@trumerit.example.org" } },
+        attendees: [
+          { emailAddress: { name: "Leena Patel", address: "leena@trumerit.example.org" } },
+          { emailAddress: { name: "Pat Ducoffe", address: "Pat.Ducoffe@D2L.com" } }
+        ],
+        responseStatus: { response: "accepted" }
+      }
+    ]
+  },
+  null,
+  2
+);
+
 function OutlookView() {
   const [form, setForm] = useState({
     mode: "daily_sales_scan" as OutlookIndexMode,
@@ -1382,26 +1978,86 @@ function OutlookView() {
     accountFocus: "Healthcare Educators Association"
   });
   const [plan, setPlan] = useState<OutlookIndexPlan | null>(null);
+  const [connectorJson, setConnectorJson] = useState("");
+  const [adapterUrl, setAdapterUrl] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("outlook-adapter-url") ?? "";
+  });
+  const [syncStatus, setSyncStatus] = useState("");
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const jsonHref = plan
     ? `data:application/json;charset=utf-8,${encodeURIComponent(plan.handoffJson)}`
     : "";
 
+  const buildPlan = (nextConnectorJson = connectorJson) => {
+    setPlan(buildOutlookIndexPlan({ ...form, connectorJson: nextConnectorJson, adapterUrl }));
+  };
+
+  const loadExamplePayload = () => {
+    setConnectorJson(outlookConnectorExample);
+    setSyncStatus("Loaded a connector-shaped payload so the dynamic index can be tested locally.");
+    buildPlan(outlookConnectorExample);
+  };
+
+  const runLiveSync = async () => {
+    const requestPlan = buildOutlookIndexPlan({ ...form, adapterUrl, connectorJson: "" });
+    const request = JSON.parse(requestPlan.handoffJson) as unknown;
+    setPlan(requestPlan);
+
+    if (typeof window !== "undefined" && window.outlookConnector) {
+      setSyncStatus("Running injected Outlook connector adapter...");
+      try {
+        const payload = await window.outlookConnector.sync(request);
+        const nextJson = JSON.stringify(payload, null, 2);
+        setConnectorJson(nextJson);
+        setPlan(buildOutlookIndexPlan({ ...form, adapterUrl, connectorJson: nextJson }));
+        setSyncStatus(`Live connector response loaded at ${new Date().toLocaleTimeString()}.`);
+      } catch (error) {
+        setSyncStatus(`Injected adapter failed: ${error instanceof Error ? error.message : "unknown error"}.`);
+      }
+      return;
+    }
+
+    if (!adapterUrl.trim()) {
+      setSyncStatus("Add an adapter URL or paste Outlook connector JSON, then build the dynamic index.");
+      return;
+    }
+
+    try {
+      localStorage.setItem("outlook-adapter-url", adapterUrl);
+      setSyncStatus("Requesting Outlook adapter...");
+      const response = await fetch(`${adapterUrl.replace(/\/+$/, "")}/outlook/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as unknown;
+      const nextJson = JSON.stringify(payload, null, 2);
+      setConnectorJson(nextJson);
+      setPlan(buildOutlookIndexPlan({ ...form, adapterUrl, connectorJson: nextJson }));
+      setSyncStatus(`Live connector response loaded at ${new Date().toLocaleTimeString()}.`);
+    } catch (error) {
+      setSyncStatus(`Adapter request failed: ${error instanceof Error ? error.message : "unknown error"}.`);
+    }
+  };
+
   return (
     <div className="view">
       <ViewHead
-        eyebrow="Outlook indexing"
-        title="Outlook Indexing Layer"
-        sub="Build a bounded, read-only plan for turning email and calendar windows into seller-ready tasks. Nothing sends, moves, or writes — indexing only."
+        eyebrow="Live Outlook"
+        title="Outlook Live Workbench"
+        sub="Sync Outlook Email and Calendar evidence into a seller-ready index: messages, meetings, task candidates, and suppressions. Drafts stay review-only; outbound actions require a confirmed write adapter."
       />
+      <ModuleAgentLayer moduleIds={["outlook-indexing"]} testid="outlook" />
       <div className="tool-grid">
-        <Panel eyebrow="Inputs" title="Index window">
+        <Panel eyebrow="Live inputs" title="Sync window">
           <div className="form-grid">
             <label className="field full">
-              <span>Indexing mode</span>
+              <span>Sync mode</span>
               <select
-                aria-label="Outlook indexing mode"
+                aria-label="Outlook sync mode"
                 value={form.mode}
                 onChange={(e) => set("mode")(e.target.value)}
               >
@@ -1434,21 +2090,47 @@ function OutlookView() {
               <span>Calendar focus</span>
               <input aria-label="Outlook calendar focus" value={form.calendarFocus} onChange={(e) => set("calendarFocus")(e.target.value)} />
             </label>
+            <label className="field full">
+              <span>Adapter URL</span>
+              <input
+                aria-label="Outlook adapter URL"
+                value={adapterUrl}
+                onChange={(e) => setAdapterUrl(e.target.value)}
+                placeholder="http://127.0.0.1:8787"
+              />
+            </label>
+            <label className="field full">
+              <span>Connector response JSON</span>
+              <textarea
+                aria-label="Outlook connector JSON"
+                rows={8}
+                value={connectorJson}
+                onChange={(e) => setConnectorJson(e.target.value)}
+                placeholder="Paste Outlook Email search_messages, fetch_messages_batch, Calendar list_events, or adapter response JSON..."
+              />
+            </label>
           </div>
           <div className="tool-actions">
-            <button className="btn btn-primary" onClick={() => setPlan(buildOutlookIndexPlan(form))}>
-              Build Index Plan
+            <button className="btn btn-primary" onClick={runLiveSync}>
+              <RefreshCw size={15} /> Run Live Sync
+            </button>
+            <button className="btn" onClick={() => buildPlan()}>
+              <PlugZap size={15} /> Build Dynamic Index
+            </button>
+            <button className="btn" onClick={loadExamplePayload}>
+              Load Test Payload
             </button>
           </div>
+          {syncStatus && <div className="callout info" style={{ marginTop: 12 }}>{syncStatus}</div>}
         </Panel>
 
         <div className="stack">
-          <Panel eyebrow="Read-only plan" title="Index Plan">
-            <div data-testid="outlook-index-plan">
+          <Panel eyebrow="Connection state" title="Live Index">
+            <div data-testid="outlook-live-index">
               {!plan ? (
                 <div className="empty-state">
-                  <div className="big">No plan yet</div>
-                  Set a window and build the index plan.
+                  <div className="big">No sync yet</div>
+                  Run the adapter or paste connector JSON to build a dynamic Outlook index.
                 </div>
               ) : (
                 <div>
@@ -1457,15 +2139,45 @@ function OutlookView() {
                       <b>{plan.indexScore}</b>
                     </div>
                     <div>
-                      <div className="eyebrow">Index readiness</div>
+                      <div className="eyebrow">Live readiness</div>
                       <div style={{ fontSize: 18, fontWeight: 700 }}>{plan.readiness}</div>
                       <div className="muted" style={{ fontSize: 12 }}>
-                        {plan.stats.writeActions} write actions · read-only
+                        {plan.connectorState} · {plan.stats.writeActions} write actions
                       </div>
                     </div>
                   </div>
 
-                  <div className="subhead">Index stages</div>
+                  <div className="stats" style={{ marginBottom: 14 }}>
+                    <div className="stat">
+                      <div className="k">{plan.stats.indexedMessages}</div>
+                      <div className="l">Messages</div>
+                    </div>
+                    <div className="stat">
+                      <div className="k">{plan.stats.indexedEvents}</div>
+                      <div className="l">Events</div>
+                    </div>
+                    <div className="stat">
+                      <div className="k">{plan.stats.taskCandidates}</div>
+                      <div className="l">Tasks</div>
+                    </div>
+                    <div className="stat">
+                      <div className="k">{plan.stats.suppressions}</div>
+                      <div className="l">Suppressed</div>
+                    </div>
+                  </div>
+
+                  {plan.parseWarnings.length > 0 && (
+                    <div className="stack" style={{ gap: 8, marginBottom: 14 }}>
+                      {plan.parseWarnings.map((warning) => (
+                        <div className="warnbox" key={warning}>
+                          <TriangleAlert size={15} />
+                          <span>{warning}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="subhead">Live stages</div>
                   <div className="timeline">
                     {plan.stages.map((s) => (
                       <div className="tl-item" key={s.id}>
@@ -1478,7 +2190,7 @@ function OutlookView() {
                     ))}
                   </div>
 
-                  <div className="subhead">Index schema</div>
+                  <div className="subhead">Evidence schema</div>
                   <div className="grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
                     {plan.indexSchema.map((s) => (
                       <div className="schema-card" key={s.label}>
@@ -1496,7 +2208,73 @@ function OutlookView() {
           </Panel>
 
           {plan && (
-            <Panel eyebrow="Read-only" title="Connector Action Plan">
+            <Panel eyebrow="Seller work" title="Dynamic Task Candidates">
+              <div data-testid="outlook-live-tasks">
+                {plan.taskCandidates.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="big">No task candidates</div>
+                    The current connector payload did not include concrete seller work.
+                  </div>
+                ) : (
+                  plan.taskCandidates.map((task) => (
+                    <div className="listrow" key={task.id}>
+                      <span className="lead">{task.due}</span>
+                      <div className="body">
+                        <strong>{task.concreteNextAction}</strong>
+                        <p>
+                          {task.account}
+                          {task.contact ? ` · ${task.contact}` : ""} — {task.whyItMatters}
+                        </p>
+                        <div className="queue-meta">
+                          <span className="pill plain">{task.source}</span>
+                          <span className="pill plain">Owner · {task.owner}</span>
+                        </div>
+                      </div>
+                      <span className={`pill ${priorityPill(task.priority)}`}>{task.priority}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {plan && (
+            <Panel eyebrow="Connector evidence" title="Indexed Messages And Events">
+              <div data-testid="outlook-evidence">
+                {plan.messageIndex.slice(0, 6).map((message) => (
+                  <div className="listrow" key={message.id}>
+                    <span className={`pill ${priorityPill(message.signalStrength)}`}>{message.signalStrength}</span>
+                    <div className="body">
+                      <strong>{message.subject}</strong>
+                      <p>
+                        {message.sender} · {message.receivedAt || "No timestamp"} — {message.preview || "No preview"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                {plan.eventIndex.slice(0, 6).map((event) => (
+                  <div className="listrow" key={event.id}>
+                    <span className={`pill ${priorityPill(event.signalStrength)}`}>{event.signalStrength}</span>
+                    <div className="body">
+                      <strong>{event.title}</strong>
+                      <p>
+                        {event.start || "No start"} · {event.organizer} · {event.responseState}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                {plan.messageIndex.length + plan.eventIndex.length === 0 && (
+                  <div className="empty-state">
+                    <div className="big">No evidence indexed</div>
+                    Paste connector output to populate live message and event rows.
+                  </div>
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {plan && (
+            <Panel eyebrow="Read adapter" title="Connector Requests">
               <div className="export-row" style={{ marginBottom: 14 }}>
                 <a className="btn" href={jsonHref} download="outlook-index.json">
                   <Download size={15} /> Export JSON
@@ -1510,6 +2288,11 @@ function OutlookView() {
                     <span className="sp" />
                     <span className={`pill ${cmd.safety === "Read-only" ? "ok" : "warn"}`}>{cmd.safety}</span>
                   </div>
+                  {cmd.endpoint && (
+                    <div className="callout teal" style={{ margin: 10, fontSize: 12 }}>
+                      {cmd.endpoint}
+                    </div>
+                  )}
                   <pre>{cmd.payload}</pre>
                 </div>
               ))}
@@ -1525,6 +2308,20 @@ function OutlookView() {
                   <li key={r}><span className="mk">!</span>{r}</li>
                 ))}
               </ul>
+            </Panel>
+          )}
+
+          {plan && plan.suppressionLog.length > 0 && (
+            <Panel eyebrow="Noise control" title="Suppression Log">
+              {plan.suppressionLog.map((entry) => (
+                <div className="listrow" key={entry.id}>
+                  <span className="pill plain">{entry.sourceType}</span>
+                  <div className="body">
+                    <strong>{entry.reason}</strong>
+                    <p>{entry.evidence}</p>
+                  </div>
+                </div>
+              ))}
             </Panel>
           )}
         </div>
@@ -1611,7 +2408,7 @@ export function App() {
           })}
         </nav>
         <div className="sidebar-foot">
-          Import-first · review-safe. Drafts are artifacts for Pat to review — nothing sends without a real connector.
+          Connected and review-safe. Drafts are artifacts for Pat to review; outbound actions need a confirmed write adapter.
         </div>
       </aside>
 
